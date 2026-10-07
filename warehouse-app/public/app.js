@@ -56,8 +56,12 @@ const whenText = (value) => value ? new Date(value).toLocaleString('ar-EG', { da
 const whoText = (value) => value ? esc(value) : '—';
 const esc = (value) => String(value ?? '').replace(/[&<>"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
 
-async function api(url, options) {
-  const response = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...options });
+async function api(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+  });
   if (response.status === 401 && !url.endsWith('/api/login') && !url.endsWith('/api/me')) {
     showLogin();
     throw new Error('انتهت الجلسة');
@@ -148,8 +152,16 @@ async function openSection(id) {
     }
     if (id === 'activity') return renderActivity(await api(listUrl('/api/activity')));
     if (id === 'accounts') return renderAccounts(await api('/api/users'));
-    if (id === 'newSale') return renderNewSale();
-    if (id === 'newPurchase') return renderNewPurchase();
+    if (id === 'newSale') {
+      if (!draft.hold) resetSaleDraft();
+      draft.hold = false;
+      return renderNewSale();
+    }
+    if (id === 'newPurchase') {
+      if (!purchaseDraft.hold) resetPurchaseDraft();
+      purchaseDraft.hold = false;
+      return renderNewPurchase();
+    }
     if (id === 'sales') return renderInvoices('sales', await api(listUrl('/api/sales')), 'عميل');
     if (id === 'purchases') return renderInvoices('purchases', await api(listUrl('/api/purchases')), 'مورد');
   } catch (error) {
@@ -629,20 +641,123 @@ function renderStores(data) {
   );
 }
 
-const draft = { clientId: 0, clientName: 'عميل نقدي', lines: [] };
+const draft = { clientId: 0, clientName: 'عميل نقدي', lines: [], editId: null, editNo: null, paid: true, partial: 0, storeId: null, hold: false };
+const purchaseDraft = { supplierId: 0, supplierName: 'مشتريات نقدية', lines: [], editId: null, editNo: null, paid: true, partial: 0, storeId: null, hold: false };
+
+function resetSaleDraft() {
+  draft.clientId = 0;
+  draft.clientName = 'عميل نقدي';
+  draft.lines = [];
+  draft.editId = null;
+  draft.editNo = null;
+  draft.paid = true;
+  draft.partial = 0;
+  draft.storeId = null;
+  draft.hold = false;
+}
+
+function resetPurchaseDraft() {
+  purchaseDraft.supplierId = 0;
+  purchaseDraft.supplierName = 'مشتريات نقدية';
+  purchaseDraft.lines = [];
+  purchaseDraft.editId = null;
+  purchaseDraft.editNo = null;
+  purchaseDraft.paid = true;
+  purchaseDraft.partial = 0;
+  purchaseDraft.storeId = null;
+  purchaseDraft.hold = false;
+}
+
+function storeOptions(selected) {
+  const chosen = selected === null || selected === undefined || selected === '' ? null : Number(selected);
+  return state.stores.map((store) => `<option value="${store.id}" ${chosen !== null && Number(store.id) === chosen ? 'selected' : ''}>${esc(store.name)}</option>`).join('');
+}
+
+function inlineProductHtml(prefix) {
+  return `<button id="${prefix}Show" class="ghost wide-ghost" type="button">إضافة منتج غير موجود</button>
+    <div id="${prefix}Box" class="mini-product hidden">
+      <input id="${prefix}Name" maxlength="100" placeholder="اسم المنتج">
+      <input id="${prefix}Code" maxlength="50" placeholder="الكود، ويمكن تركه فارغاً">
+      <input id="${prefix}Sale" type="number" min="0" step="0.01" placeholder="سعر البيع">
+      <input id="${prefix}Buy" type="number" min="0" step="0.01" placeholder="سعر الشراء">
+      <button id="${prefix}Save" type="button">حفظ المنتج وإضافته للفاتورة</button>
+    </div>`;
+}
+
+function bindInlineProduct(prefix, priceKind, onCreated, errorId) {
+  document.getElementById(prefix + 'Show').onclick = () => document.getElementById(prefix + 'Box').classList.toggle('hidden');
+  document.getElementById(prefix + 'Save').onclick = async () => {
+    const error = document.getElementById(errorId);
+    const button = document.getElementById(prefix + 'Save');
+    error.textContent = '';
+    const name = document.getElementById(prefix + 'Name').value.trim();
+    const code = document.getElementById(prefix + 'Code').value.trim();
+    const salePrice = Number(document.getElementById(prefix + 'Sale').value || 0);
+    const buyPrice = Number(document.getElementById(prefix + 'Buy').value || 0);
+    if (!name) {
+      error.textContent = 'اسم المنتج مطلوب';
+      return;
+    }
+    button.disabled = true;
+    try {
+      const result = await api('/api/products', {
+        method: 'POST',
+        body: JSON.stringify({ name, code, salePrice, buyPrice })
+      });
+      const typed = Number(document.getElementById('linePrice').value);
+      const qty = Number(document.getElementById('lineQty').value);
+      onCreated({
+        productId: Number(result.id),
+        name: `${result.code || code || result.id} - ${name}`,
+        qty: qty > 0 ? qty : 1,
+        price: typed > 0 ? typed : (priceKind === 'buy' ? buyPrice : salePrice)
+      });
+      document.getElementById(prefix + 'Name').value = '';
+      document.getElementById(prefix + 'Code').value = '';
+      document.getElementById(prefix + 'Sale').value = '';
+      document.getElementById(prefix + 'Buy').value = '';
+      document.getElementById(prefix + 'Box').classList.add('hidden');
+    } catch (err) {
+      error.textContent = err.message;
+    }
+    button.disabled = false;
+  };
+}
+
+function readLineInputs(lines) {
+  document.querySelectorAll('.line-qty').forEach((input) => {
+    const line = lines[Number(input.dataset.i)];
+    if (line) line.qty = Number(input.value);
+  });
+  document.querySelectorAll('.line-price').forEach((input) => {
+    const line = lines[Number(input.dataset.i)];
+    if (line) line.price = Number(input.value);
+  });
+  document.querySelectorAll('.line-store').forEach((input) => {
+    const line = lines[Number(input.dataset.i)];
+    if (line) line.storeId = Number(input.value);
+  });
+}
+
+function editHeading(kind, no) {
+  const title = document.querySelector('#title span');
+  if (title) title.textContent = kind === 'sales' ? `تعديل فاتورة بيع ${no}` : `تعديل فاتورة شراء ${no}`;
+  document.getElementById('subtitle').textContent = 'التعديل يحدّث الأصناف والمخزون والقيد في قاعدة البيانات الفعلية';
+}
 
 function renderNewSale() {
   if (!state.stores.length) state.stores = [];
-  const storeOptions = state.stores.map((store) => `<option value="${store.id}">${esc(store.name)}</option>`).join('');
+  const editing = Boolean(draft.editId);
+  if (editing) editHeading('sales', draft.editNo);
   content.innerHTML = `
     <div class="panel panel-pad sale-form">
       <div class="toolbar">
         <input id="clientQ" placeholder="ابحث عن عميل للبيع الآجل">
-        <select id="saleStore">${storeOptions}</select>
-        <label class="checkline"><input id="paidNow" type="checkbox" checked> تحصيل نقدي</label>
+        <select id="saleStore">${storeOptions(draft.storeId)}</select>
+        <label class="checkline"><input id="paidNow" type="checkbox" ${!editing || draft.paid ? 'checked' : ''}> تحصيل نقدي</label>
         <button id="findClient" type="button" class="ghost">بحث عميل</button>
       </div>
-      <div id="clientPick" class="meta">العميل: عميل نقدي</div>
+      <div id="clientPick" class="meta">العميل: ${esc(draft.clientName || 'عميل نقدي')}</div>
       <div id="clientResults"></div>
       <div class="toolbar">
         <input id="productQ" placeholder="كود أو اسم المنتج">
@@ -651,23 +766,36 @@ function renderNewSale() {
         <button id="findProduct" type="button" class="ghost">بحث منتج</button>
       </div>
       <div id="productResults"></div>
-    <div class="data" style="--cols:2fr .7fr .8fr .9fr auto">
-      <div class="data-head"><span>الصنف</span><span>الكمية</span><span>السعر</span><span>الإجمالي</span><span></span></div>
-      <div id="draftLines"></div>
-    </div>
+      ${inlineProductHtml('saleNew')}
+      <div class="data line-grid" style="--cols:${editing ? '1.5fr .9fr .6fr .6fr .7fr auto' : '2fr .7fr .8fr .9fr auto'}">
+        <div class="data-head"><span>الصنف</span>${editing ? '<span>المخزن</span>' : ''}<span>الكمية</span><span>السعر</span><span>الإجمالي</span><span></span></div>
+        <div id="draftLines"></div>
+      </div>
       <div class="meta"><span id="draftTotal">الإجمالي: 0</span></div>
-      <button id="saveSale" type="button">حفظ الفاتورة</button>
-      <p class="note">الحفظ ينزل على قاعدة البيانات الفعلية: فاتورة، أصناف، مخزون، قيد، وتحصيل نقدي لو تم اختياره.</p>
+      ${draft.partial ? `<p class="note">المحصّل حالياً ${money(draft.partial)}. لو سيبت التحصيل غير محدد، المبلغ المحصّل يفضل كما هو.</p>` : ''}
+      <button id="saveSale" type="button">${editing ? 'حفظ التعديل' : 'حفظ الفاتورة'}</button>
+      ${editing ? '<button id="cancelEdit" class="ghost wide-ghost" type="button">رجوع للفاتورة</button>' : ''}
+      <p class="note">${editing ? 'حفظ التعديل يغيّر أصناف الفاتورة والمخزون والقيد على قاعدة البيانات الفعلية.' : 'الحفظ ينزل على قاعدة البيانات الفعلية: فاتورة، أصناف، مخزون، قيد، وتحصيل نقدي لو تم اختياره.'}</p>
       <div id="saleError" class="error"></div>
     </div>`;
   const drawLines = () => {
     const total = draft.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
     document.getElementById('draftLines').innerHTML = draft.lines.map((line, index) =>
-      `<div class="data-row"><span data-label="الصنف">${esc(line.name)}</span><span data-label="الكمية">${num(line.qty)}</span><span data-label="السعر">${money(line.price)}</span><span data-label="الإجمالي">${money(line.qty * line.price)}</span><span data-label=""><button type="button" data-i="${index}" class="ghost remove-line">حذف</button></span></div>`
+      `<div class="data-row"><span data-label="الصنف">${esc(line.name)}</span>${editing ? `<span data-label="المخزن"><select data-i="${index}" class="line-store">${storeOptions(line.storeId)}</select></span>` : ''}<span data-label="الكمية"><input class="line-qty" data-i="${index}" type="number" min="0.01" step="0.01" value="${line.qty}"></span><span data-label="السعر"><input class="line-price" data-i="${index}" type="number" min="0" step="0.01" value="${line.price}"></span><span data-label="الإجمالي" class="line-sum">${money(line.qty * line.price)}</span><span data-label="حذف"><button type="button" data-i="${index}" class="ghost remove-line">حذف</button></span></div>`
     ).join('') || '<div class="empty">لم تُضف أصناف</div>';
     document.getElementById('draftTotal').textContent = 'الإجمالي: ' + money(total);
+    document.querySelectorAll('.line-qty, .line-price').forEach((input) => {
+      input.oninput = () => {
+        readLineInputs(draft.lines);
+        const row = input.closest('.data-row');
+        const line = draft.lines[Number(input.dataset.i)];
+        row.querySelector('.line-sum').textContent = money(line.qty * line.price);
+        const next = draft.lines.reduce((sum, item) => sum + item.qty * item.price, 0);
+        document.getElementById('draftTotal').textContent = 'الإجمالي: ' + money(next);
+      };
+    });
     document.querySelectorAll('.remove-line').forEach((button) => {
-      button.onclick = () => { draft.lines.splice(Number(button.dataset.i), 1); drawLines(); };
+      button.onclick = () => { readLineInputs(draft.lines); draft.lines.splice(Number(button.dataset.i), 1); drawLines(); };
     });
   };
   drawLines();
@@ -713,30 +841,57 @@ function renderNewSale() {
           document.getElementById('saleError').textContent = 'اكتب الكمية والسعر قبل اختيار المنتج';
           return;
         }
-        draft.lines.push({ productId: Number(row.dataset.id), name: row.dataset.name, qty, price });
+        draft.lines.push({
+          productId: Number(row.dataset.id),
+          name: row.dataset.name,
+          storeId: Number(document.getElementById('saleStore').value),
+          qty,
+          price
+        });
         document.getElementById('saleError').textContent = '';
         drawLines();
       };
     });
   };
+  bindInlineProduct('saleNew', 'sale', (line) => {
+    readLineInputs(draft.lines);
+    draft.lines.push({ ...line, storeId: Number(document.getElementById('saleStore').value) });
+    drawLines();
+  }, 'saleError');
+  const cancelEdit = document.getElementById('cancelEdit');
+  if (cancelEdit) cancelEdit.onclick = async () => {
+    const id = draft.editId;
+    resetSaleDraft();
+    await openSection('sales');
+    await openInvoice('sales', id);
+  };
   document.getElementById('saveSale').onclick = async () => {
     const button = document.getElementById('saveSale');
     document.getElementById('saleError').textContent = '';
+    readLineInputs(draft.lines);
     button.disabled = true;
+    const editingNow = Boolean(draft.editId);
     try {
-      const result = await api('/api/sales', {
-        method: 'POST',
-        body: JSON.stringify({
-          clientId: draft.clientId,
-          storeId: Number(document.getElementById('saleStore').value),
-          paid: document.getElementById('paidNow').checked,
-          lines: draft.lines.map((line) => ({ productId: line.productId, qty: line.qty, price: line.price }))
-        })
+      const payload = {
+        clientId: draft.clientId,
+        storeId: Number(document.getElementById('saleStore').value),
+        paid: document.getElementById('paidNow').checked,
+        lines: draft.lines.map((line) => ({
+          lineId: line.lineId,
+          productId: line.productId,
+          storeId: editingNow ? line.storeId : Number(document.getElementById('saleStore').value),
+          qty: line.qty,
+          price: line.price
+        }))
+      };
+      const result = await api(editingNow ? '/api/sales/' + draft.editId : '/api/sales', {
+        method: editingNow ? 'PUT' : 'POST',
+        body: JSON.stringify(payload)
       });
-      draft.lines = [];
-      draft.clientId = 0;
+      resetSaleDraft();
       state.section = 'sales';
       state.page = 1;
+      state.q = '';
       await openSection('sales');
       await openInvoice('sales', result.id);
     } catch (error) {
@@ -746,19 +901,18 @@ function renderNewSale() {
   };
 }
 
-const purchaseDraft = { supplierId: 0, supplierName: 'مشتريات نقدية', lines: [] };
-
 function renderNewPurchase() {
-  const storeOptions = state.stores.map((store) => `<option value="${store.id}">${esc(store.name)}</option>`).join('');
+  const editing = Boolean(purchaseDraft.editId);
+  if (editing) editHeading('purchases', purchaseDraft.editNo);
   content.innerHTML = `
     <div class="panel panel-pad sale-form">
       <div class="toolbar">
         <input id="supplierQ" placeholder="ابحث عن مورد للشراء الآجل">
-        <select id="purchaseStore">${storeOptions}</select>
-        <label class="checkline"><input id="paidNow" type="checkbox" checked> سداد نقدي</label>
+        <select id="purchaseStore">${storeOptions(purchaseDraft.storeId)}</select>
+        <label class="checkline"><input id="paidNow" type="checkbox" ${!editing || purchaseDraft.paid ? 'checked' : ''}> سداد نقدي</label>
         <button id="findSupplier" type="button" class="ghost">بحث مورد</button>
       </div>
-      <div id="supplierPick" class="meta">المورد: مشتريات نقدية</div>
+      <div id="supplierPick" class="meta">المورد: ${esc(purchaseDraft.supplierName || 'مشتريات نقدية')}</div>
       <div id="supplierResults"></div>
       <div class="toolbar">
         <input id="productQ" placeholder="كود أو اسم المنتج">
@@ -767,23 +921,36 @@ function renderNewPurchase() {
         <button id="findProduct" type="button" class="ghost">بحث منتج</button>
       </div>
       <div id="productResults"></div>
-      <div class="data" style="--cols:2fr .7fr .8fr .9fr auto">
-        <div class="data-head"><span>الصنف</span><span>الكمية</span><span>السعر</span><span>الإجمالي</span><span></span></div>
+      ${inlineProductHtml('buyNew')}
+      <div class="data line-grid" style="--cols:${editing ? '1.5fr .9fr .6fr .6fr .7fr auto' : '2fr .7fr .8fr .9fr auto'}">
+        <div class="data-head"><span>الصنف</span>${editing ? '<span>المخزن</span>' : ''}<span>الكمية</span><span>السعر</span><span>الإجمالي</span><span></span></div>
         <div id="draftLines"></div>
       </div>
       <div class="meta"><span id="draftTotal">الإجمالي: 0</span></div>
-      <button id="savePurchase" type="button">حفظ فاتورة الشراء</button>
-      <p class="note">الحفظ ينزل على قاعدة البيانات الفعلية: فاتورة شراء، أصناف، زيادة المخزون، قيد، وسداد نقدي لو تم اختياره.</p>
+      ${purchaseDraft.partial ? `<p class="note">المدفوع حالياً ${money(purchaseDraft.partial)}. لو سيبت السداد غير محدد، المبلغ المدفوع يفضل كما هو.</p>` : ''}
+      <button id="savePurchase" type="button">${editing ? 'حفظ التعديل' : 'حفظ فاتورة الشراء'}</button>
+      ${editing ? '<button id="cancelEdit" class="ghost wide-ghost" type="button">رجوع للفاتورة</button>' : ''}
+      <p class="note">${editing ? 'حفظ التعديل يغيّر أصناف الفاتورة والمخزون والقيد على قاعدة البيانات الفعلية.' : 'الحفظ ينزل على قاعدة البيانات الفعلية: فاتورة شراء، أصناف، زيادة المخزون، قيد، وسداد نقدي لو تم اختياره.'}</p>
       <div id="purchaseError" class="error"></div>
     </div>`;
   const drawLines = () => {
     const total = purchaseDraft.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
     document.getElementById('draftLines').innerHTML = purchaseDraft.lines.map((line, index) =>
-      `<div class="data-row"><span data-label="الصنف">${esc(line.name)}</span><span data-label="الكمية">${num(line.qty)}</span><span data-label="السعر">${money(line.price)}</span><span data-label="الإجمالي">${money(line.qty * line.price)}</span><span data-label=""><button type="button" data-i="${index}" class="ghost remove-line">حذف</button></span></div>`
+      `<div class="data-row"><span data-label="الصنف">${esc(line.name)}</span>${editing ? `<span data-label="المخزن"><select data-i="${index}" class="line-store">${storeOptions(line.storeId)}</select></span>` : ''}<span data-label="الكمية"><input class="line-qty" data-i="${index}" type="number" min="0.01" step="0.01" value="${line.qty}"></span><span data-label="السعر"><input class="line-price" data-i="${index}" type="number" min="0" step="0.01" value="${line.price}"></span><span data-label="الإجمالي" class="line-sum">${money(line.qty * line.price)}</span><span data-label="حذف"><button type="button" data-i="${index}" class="ghost remove-line">حذف</button></span></div>`
     ).join('') || '<div class="empty">لم تُضف أصناف</div>';
     document.getElementById('draftTotal').textContent = 'الإجمالي: ' + money(total);
+    document.querySelectorAll('.line-qty, .line-price').forEach((input) => {
+      input.oninput = () => {
+        readLineInputs(purchaseDraft.lines);
+        const row = input.closest('.data-row');
+        const line = purchaseDraft.lines[Number(input.dataset.i)];
+        row.querySelector('.line-sum').textContent = money(line.qty * line.price);
+        const next = purchaseDraft.lines.reduce((sum, item) => sum + item.qty * item.price, 0);
+        document.getElementById('draftTotal').textContent = 'الإجمالي: ' + money(next);
+      };
+    });
     document.querySelectorAll('.remove-line').forEach((button) => {
-      button.onclick = () => { purchaseDraft.lines.splice(Number(button.dataset.i), 1); drawLines(); };
+      button.onclick = () => { readLineInputs(purchaseDraft.lines); purchaseDraft.lines.splice(Number(button.dataset.i), 1); drawLines(); };
     });
   };
   drawLines();
@@ -829,31 +996,57 @@ function renderNewPurchase() {
           document.getElementById('purchaseError').textContent = 'اكتب الكمية والسعر قبل اختيار المنتج';
           return;
         }
-        purchaseDraft.lines.push({ productId: Number(row.dataset.id), name: row.dataset.name, qty, price });
+        purchaseDraft.lines.push({
+          productId: Number(row.dataset.id),
+          name: row.dataset.name,
+          storeId: Number(document.getElementById('purchaseStore').value),
+          qty,
+          price
+        });
         document.getElementById('purchaseError').textContent = '';
         drawLines();
       };
     });
   };
+  bindInlineProduct('buyNew', 'buy', (line) => {
+    readLineInputs(purchaseDraft.lines);
+    purchaseDraft.lines.push({ ...line, storeId: Number(document.getElementById('purchaseStore').value) });
+    drawLines();
+  }, 'purchaseError');
+  const cancelEdit = document.getElementById('cancelEdit');
+  if (cancelEdit) cancelEdit.onclick = async () => {
+    const id = purchaseDraft.editId;
+    resetPurchaseDraft();
+    await openSection('purchases');
+    await openInvoice('purchases', id);
+  };
   document.getElementById('savePurchase').onclick = async () => {
     const button = document.getElementById('savePurchase');
     document.getElementById('purchaseError').textContent = '';
+    readLineInputs(purchaseDraft.lines);
     button.disabled = true;
+    const editingNow = Boolean(purchaseDraft.editId);
     try {
-      const result = await api('/api/purchases', {
-        method: 'POST',
-        body: JSON.stringify({
-          supplierId: purchaseDraft.supplierId,
-          storeId: Number(document.getElementById('purchaseStore').value),
-          paid: document.getElementById('paidNow').checked,
-          lines: purchaseDraft.lines.map((line) => ({ productId: line.productId, qty: line.qty, price: line.price }))
-        })
+      const payload = {
+        supplierId: purchaseDraft.supplierId,
+        storeId: Number(document.getElementById('purchaseStore').value),
+        paid: document.getElementById('paidNow').checked,
+        lines: purchaseDraft.lines.map((line) => ({
+          lineId: line.lineId,
+          productId: line.productId,
+          storeId: editingNow ? line.storeId : Number(document.getElementById('purchaseStore').value),
+          qty: line.qty,
+          price: line.price
+        }))
+      };
+      const result = await api(editingNow ? '/api/purchases/' + purchaseDraft.editId : '/api/purchases', {
+        method: editingNow ? 'PUT' : 'POST',
+        body: JSON.stringify(payload)
       });
-      purchaseDraft.lines = [];
-      purchaseDraft.supplierId = 0;
-      purchaseDraft.supplierName = 'مشتريات نقدية';
+      resetPurchaseDraft();
       state.section = 'purchases';
       state.page = 1;
+      state.q = '';
       await openSection('purchases');
       await openInvoice('purchases', result.id);
     } catch (error) {
@@ -872,7 +1065,10 @@ async function openInvoice(kind, id) {
       <div><h2>فاتورة ${invoice.no}</h2><p>${esc(invoice.name)} · ${dateText(invoice.date)} · المستخدم: ${whoText(invoice.byName)}</p></div>
       <button id="closeDrawer" class="ghost" type="button">إغلاق</button>
     </header>
-    ${data.lines.some((line) => Number(line.qty) - Number(line.returned) > 0) ? '<button id="returnBtn" class="history-btn" type="button">مرتجع من الفاتورة</button>' : ''}
+    <div class="sheet-actions">
+      ${data.lines.some((line) => Number(line.qty) - Number(line.returned) > 0) ? '<button id="returnBtn" class="history-btn" type="button">مرتجع من الفاتورة</button>' : ''}
+      <button id="editInvoice" class="ghost" type="button">تعديل الفاتورة</button>
+    </div>
     <div class="money">
       <div><span>الإجمالي</span><strong>${money(invoice.total)}</strong></div>
       <div><span>المدفوع</span><strong>${money(invoice.paid)}</strong></div>
@@ -900,6 +1096,37 @@ async function openInvoice(kind, id) {
   drawer.onclick = (event) => { if (event.target === drawer) drawer.classList.add('hidden'); };
   const returnBtn = document.getElementById('returnBtn');
   if (returnBtn) returnBtn.onclick = () => openReturn(kind, id, data);
+  document.getElementById('editInvoice').onclick = () => beginEdit(kind, id);
+}
+
+async function beginEdit(kind, id) {
+  const data = await api(`/api/${kind}/${id}`);
+  const invoice = data.invoice;
+  const fully = Number(invoice.paid) > 0 && Math.abs(Number(invoice.paid) - Number(invoice.total)) < 0.05;
+  const lines = data.lines.map((line) => ({
+    lineId: Number(line.lineId),
+    productId: Number(line.productId),
+    storeId: Number(line.storeId),
+    name: `${line.code} - ${line.name}`,
+    qty: Number(line.qty),
+    price: Number(line.price)
+  }));
+  const target = kind === 'sales' ? draft : purchaseDraft;
+  if (kind === 'sales') {
+    target.clientId = Number(invoice.clientId) || 0;
+    target.clientName = invoice.name || 'عميل نقدي';
+  } else {
+    target.supplierId = Number(invoice.supplierId) || 0;
+    target.supplierName = invoice.name || 'مشتريات نقدية';
+  }
+  target.lines = lines;
+  target.editId = Number(id);
+  target.editNo = invoice.no;
+  target.paid = fully;
+  target.partial = !fully && Number(invoice.paid) > 0 ? Number(invoice.paid) : 0;
+  target.storeId = lines[0] ? lines[0].storeId : null;
+  target.hold = true;
+  await openSection(kind === 'sales' ? 'newSale' : 'newPurchase');
 }
 
 function openReturn(kind, id, data) {

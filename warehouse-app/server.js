@@ -40,7 +40,15 @@ app.use(session({
     maxAge: 12 * 60 * 60 * 1000
   }
 }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders(res, filePath) {
+    if (filePath.endsWith('.html')) res.set('Cache-Control', 'no-store');
+  }
+}));
 
 const usersFile = path.join(__dirname, 'data', 'users.json');
 const activityFile = path.join(__dirname, 'data', 'activity.json');
@@ -881,6 +889,7 @@ app.get('/api/sales/:id', requireAuth, async (req, res) => {
       SELECT
         si.SellingInvoiceID AS id,
         si.SellingInvoiceNo AS no,
+        si.ClientID AS clientId,
         si.SellingInvoiceDate AS date,
         ISNULL(c.ClientName, N'') AS name,
         ISNULL(si.SellingInvoiceTotalAmount, 0) AS total,
@@ -897,6 +906,8 @@ app.get('/api/sales/:id', requireAuth, async (req, res) => {
     const lines = await pool.request().input('id', sql.Numeric(18, 0), id).query(`
       SELECT
         d.id AS lineId,
+        d.ProductID AS productId,
+        d.StoreID AS storeId,
         ISNULL(p.ProductCode, '') AS code,
         ISNULL(p.ProductName, N'') AS name,
         ISNULL(s.StoreName, N'') AS storeName,
@@ -963,6 +974,7 @@ app.get('/api/purchases/:id', requireAuth, async (req, res) => {
       SELECT
         pi.PurchaseInvoiceID AS id,
         pi.PurchaseInvoiceNo AS no,
+        pi.SupplierID AS supplierId,
         pi.PurchaseInvoiceDate AS date,
         ISNULL(s.SupplierName, N'') AS name,
         ISNULL(pi.PurchaseInvoiceTotalAmount, 0) AS total,
@@ -979,6 +991,8 @@ app.get('/api/purchases/:id', requireAuth, async (req, res) => {
     const lines = await pool.request().input('id', sql.Numeric(18, 0), id).query(`
       SELECT
         d.Id AS lineId,
+        d.ProductID AS productId,
+        d.StoreID AS storeId,
         ISNULL(p.ProductCode, '') AS code,
         ISNULL(p.ProductName, N'') AS name,
         ISNULL(st.StoreName, N'') AS storeName,
@@ -1211,6 +1225,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
         ORDER BY ID DESC
       `, [{ name: 'pid', type: sql.Numeric(18, 0), value: line.productId }]);
       const cost = costRow.recordset[0] ? Number(costRow.recordset[0].cost) : 0;
+      const guid = crypto.randomUUID();
       const product = await txQuery(tx, `
         SELECT ProductId FROM tblProducts WITH (UPDLOCK, HOLDLOCK) WHERE ProductId = @pid
       `, [{ name: 'pid', type: sql.Numeric(18, 0), value: line.productId }]);
@@ -1235,7 +1250,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
            CompCode, RowGUID)
         VALUES
           (@invoiceNo, CAST(GETDATE() AS date), CAST(GETDATE() AS date), @pid, @clientId, @store, 0, 0,
-           @qty, 0, @price, @lineTotal, @cost, 2, 0, NEWID())
+           @qty, 0, @price, @lineTotal, @cost, 2, 0, @guid)
       `, [
         { name: 'invoiceNo', type: sql.Numeric(18, 0), value: invoiceNo },
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
@@ -1244,7 +1259,8 @@ app.post('/api/sales', requireAuth, async (req, res) => {
         { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
         { name: 'price', type: sql.Numeric(18, 4), value: line.price },
         { name: 'lineTotal', type: sql.Numeric(18, 4), value: line.total },
-        { name: 'cost', type: sql.Numeric(18, 4), value: cost }
+        { name: 'cost', type: sql.Numeric(18, 4), value: cost },
+        { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
       await txQuery(tx, `
         INSERT INTO tblSellingInvoicesDetails
@@ -1255,7 +1271,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
            RowGUID, InventoryDate, InsertedDate, InsertedBy)
         VALUES
           (@invoiceId, @pid, @qty, 0, 0, @qty, 0, 0, @store, @price, 0, @lineTotal, 0,
-           0, 0, @lineTotal, 0, 0, 0, 0, 0, 0, @lineTotal, @cost, NEWID(), CAST(GETDATE() AS date), GETDATE(), @actor)
+           0, 0, @lineTotal, 0, 0, 0, 0, 0, 0, @lineTotal, @cost, @guid, CAST(GETDATE() AS date), GETDATE(), @actor)
       `, [
         { name: 'invoiceId', type: sql.Numeric(18, 0), value: invoiceId },
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
@@ -1263,7 +1279,8 @@ app.post('/api/sales', requireAuth, async (req, res) => {
         { name: 'store', type: sql.Numeric(18, 0), value: storeId },
         { name: 'price', type: sql.Numeric(18, 4), value: line.price },
         { name: 'lineTotal', type: sql.Numeric(18, 4), value: line.total },
-        { name: 'cost', type: sql.Numeric(18, 4), value: cost }
+        { name: 'cost', type: sql.Numeric(18, 4), value: cost },
+        { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
     }
 
@@ -1464,6 +1481,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
         SELECT ProductId FROM tblProducts WITH (UPDLOCK, HOLDLOCK) WHERE ProductId = @pid
       `, [{ name: 'pid', type: sql.Numeric(18, 0), value: line.productId }]);
       if (!product.recordset[0]) throw new Error('أحد الأصناف غير موجود');
+      const guid = crypto.randomUUID();
       await txQuery(tx, `
         IF NOT EXISTS (
           SELECT 1 FROM tblProductsStores WITH (UPDLOCK, HOLDLOCK)
@@ -1483,14 +1501,15 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
            OutQuantity, OutBonus, PurchasePricePerUnit, Cost, TransactionID, CompCode, RowGUID)
         VALUES
           (@invoiceNo, CAST(GETDATE() AS date), CAST(GETDATE() AS date), @pid, @supplierId, @store, @qty, 0,
-           0, 0, @price, @price, 1, 0, NEWID())
+           0, 0, @price, @price, 1, 0, @guid)
       `, [
         { name: 'invoiceNo', type: sql.Numeric(18, 0), value: invoiceNo },
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
         { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
         { name: 'store', type: sql.Numeric(18, 0), value: storeId },
         { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
-        { name: 'price', type: sql.Numeric(18, 4), value: line.price }
+        { name: 'price', type: sql.Numeric(18, 4), value: line.price },
+        { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
       await txQuery(tx, `
         INSERT INTO tblPurchaseInvoicesDetails
@@ -1500,14 +1519,15 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
            AddedItptAmount, TotalPricePerProduct, Cost, RowGUID, InventoryDate, InsertedDate, InsertedBy)
         VALUES
           (@invoiceId, @pid, @qty, 0, 0, @qty, 0, 0, @store, @price, @lineTotal, 0, 0, 0,
-           @lineTotal, 0, 0, 0, 0, 0, 0, @lineTotal, @price, NEWID(), CAST(GETDATE() AS date), GETDATE(), @actor)
+           @lineTotal, 0, 0, 0, 0, 0, 0, @lineTotal, @price, @guid, CAST(GETDATE() AS date), GETDATE(), @actor)
       `, [
         { name: 'invoiceId', type: sql.Numeric(18, 0), value: invoiceId },
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
         { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
         { name: 'store', type: sql.Numeric(18, 0), value: storeId },
         { name: 'price', type: sql.Numeric(18, 4), value: line.price },
-        { name: 'lineTotal', type: sql.Numeric(18, 4), value: line.total }
+        { name: 'lineTotal', type: sql.Numeric(18, 4), value: line.total },
+        { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
     }
 
@@ -1595,6 +1615,213 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
   }
 });
 
+function moneyClose(left, right) {
+  return Math.abs(Number(left) - Number(right)) < 0.0001;
+}
+
+function editError(error) {
+  const message = String(error.message || '');
+  if (/CK_tblSellingInvoice|CK_tblPurchaseInvoice/.test(message)) return 'المبلغ المدفوع أكبر من إجمالي الفاتورة';
+  if (/[\u0600-\u06FF]/.test(message)) return message;
+  return 'تعذر تعديل الفاتورة';
+}
+
+function editLines(bodyLines) {
+  if (!Array.isArray(bodyLines) || !bodyLines.length) return { error: 'أضف صنفاً واحداً على الأقل' };
+  const lines = [];
+  const seen = new Set();
+  for (const line of bodyLines) {
+    const productId = Number(line.productId);
+    const storeId = Number(line.storeId);
+    const qty = roundTo(line.qty, 5);
+    const price = roundTo(line.price, 4);
+    const lineId = Number(line.lineId) || 0;
+    if (!productId || !Number.isFinite(storeId) || qty == null || !(qty > 0) || price == null || price < 0) {
+      return { error: 'راجع الكمية والسعر والمخزن لكل صنف' };
+    }
+    if (lineId) {
+      if (seen.has(lineId)) return { error: 'سطر مكرر في الفاتورة' };
+      seen.add(lineId);
+    }
+    lines.push({ lineId, productId, storeId, qty, price, total: roundTo(qty * price, 4) });
+  }
+  const total = roundTo(lines.reduce((sum, line) => sum + line.total, 0), 4);
+  if (!(total > 0)) return { error: 'إجمالي الفاتورة لازم يكون أكبر من صفر' };
+  return { lines, total };
+}
+
+function nextPaid(oldPaid, oldTotal, newTotal, wantPaid) {
+  const paid = Number(oldPaid) || 0;
+  const previous = Number(oldTotal) || 0;
+  const amount = wantPaid ? newTotal : (paid > 0.0001 && paid + 0.0001 < previous ? roundTo(paid, 4) : 0);
+  if (newTotal + 0.0001 < amount) throw new Error('الإجمالي الجديد أقل من المبلغ المدفوع');
+  return amount;
+}
+
+function planLines(existing, incoming) {
+  const byId = new Map(existing.map((line) => [Number(line.lineId), line]));
+  const keep = new Set();
+  const updates = [];
+  const inserts = [];
+  for (const line of incoming) {
+    const old = line.lineId ? byId.get(line.lineId) : null;
+    if (line.lineId && !old) throw new Error('سطر غير موجود في الفاتورة');
+    if (old && Number(old.productId) === line.productId) {
+      keep.add(line.lineId);
+      updates.push({ ...line, rowGuid: old.rowGuid, oldQty: Number(old.qty), oldStore: Number(old.storeId) });
+    } else inserts.push(line);
+  }
+  return { updates, inserts, deletes: existing.filter((line) => !keep.has(Number(line.lineId))) };
+}
+
+function assertOne(result, message) {
+  const counts = result.rowsAffected || [];
+  if (!counts.includes(1)) throw new Error(message);
+}
+
+async function assertStores(tx, ids) {
+  for (const id of [...new Set(ids)]) {
+    const store = await txQuery(tx, `SELECT StoreID FROM tblStores WHERE StoreID = @id`, [
+      { name: 'id', type: sql.Numeric(18, 0), value: id }
+    ]);
+    if (!store.recordset[0]) throw new Error('المخزن غير موجود');
+  }
+}
+
+async function assertProduct(tx, productId) {
+  const product = await txQuery(tx, `SELECT ProductId FROM tblProducts WITH (UPDLOCK, HOLDLOCK) WHERE ProductId = @pid`, [
+    { name: 'pid', type: sql.Numeric(18, 0), value: productId }
+  ]);
+  if (!product.recordset[0]) throw new Error('أحد الأصناف غير موجود');
+}
+
+async function alignInventoryGuid(tx, detailTable, line, invoiceNo, transactionId, qtyColumn, partyColumn, partyId) {
+  const tables = { tblSellingInvoicesDetails: true, tblPurchaseInvoicesDetails: true };
+  const qtyColumns = { OutQuantity: true, InQuantity: true };
+  const partyColumns = { ClientID: true, SupplierID: true };
+  if (!tables[detailTable] || !qtyColumns[qtyColumn] || !partyColumns[partyColumn]) {
+    throw new Error('تعذر ربط أحد الأصناف بحركة المخزون');
+  }
+  const linked = await txQuery(tx, `
+    SELECT TOP 1 i.ID AS id
+    FROM tblInventory i WITH (UPDLOCK, HOLDLOCK)
+    INNER JOIN ${detailTable} d ON d.RowGuid = i.RowGUID
+    WHERE d.id = @lineId AND i.TransactionID = @trx
+  `, [
+    { name: 'lineId', type: sql.Numeric(18, 0), value: line.lineId },
+    { name: 'trx', type: sql.Int, value: transactionId }
+  ]);
+  if (linked.recordset[0]) return Number(linked.recordset[0].id);
+
+  const inputs = [
+    { name: 'lineId', type: sql.Numeric(18, 0), value: line.lineId },
+    { name: 'no', type: sql.Numeric(18, 0), value: invoiceNo },
+    { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
+    { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
+    { name: 'trx', type: sql.Int, value: transactionId },
+    { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
+    { name: 'party', type: sql.Numeric(18, 0), value: Number(partyId) || 0 }
+  ];
+  const attempts = [
+    { qty: true, party: true },
+    { qty: true, party: false },
+    { qty: false, party: true, single: true },
+    { qty: false, party: false, single: true }
+  ];
+  for (const attempt of attempts) {
+    const filters = [
+      'i.InvoiceNo = @no',
+      'i.ProductID = @pid',
+      'i.StoreID = @store',
+      'i.TransactionID = @trx',
+      'NOT EXISTS (SELECT 1 FROM tblSellingInvoicesDetails s WHERE s.RowGuid = i.RowGUID AND s.id <> @lineId)',
+      'NOT EXISTS (SELECT 1 FROM tblPurchaseInvoicesDetails p WHERE p.RowGuid = i.RowGUID AND p.Id <> @lineId)'
+    ];
+    if (attempt.qty) filters.push(`i.${qtyColumn} = @qty`);
+    if (attempt.party) filters.push(`ISNULL(i.${partyColumn}, 0) = @party`);
+    const found = await txQuery(tx, `
+      SELECT TOP 5 i.ID AS id
+      FROM tblInventory i WITH (UPDLOCK, HOLDLOCK)
+      WHERE ${filters.join(' AND ')}
+      ORDER BY i.ID
+    `, inputs);
+    if (!found.recordset.length) continue;
+    if (attempt.single && found.recordset.length !== 1) continue;
+    const inventoryId = Number(found.recordset[0].id);
+    const updated = await txQuery(tx, `
+      UPDATE d SET d.RowGuid = i.RowGUID
+      FROM ${detailTable} d
+      INNER JOIN tblInventory i ON i.ID = @invId
+      WHERE d.id = @lineId
+    `, [
+      { name: 'invId', type: sql.Numeric(18, 0), value: inventoryId },
+      { name: 'lineId', type: sql.Numeric(18, 0), value: line.lineId }
+    ]);
+    assertOne(updated, 'تعذر ربط أحد الأصناف بحركة المخزون');
+    return inventoryId;
+  }
+  throw new Error('تعذر ربط أحد الأصناف بحركة المخزون');
+}
+
+async function writeJournalLines(tx, journalId, docNo, journalCode, rows) {
+  for (let index = 0; index < rows.length; index += 1) {
+    const line = rows[index];
+    await txQuery(tx, `
+      INSERT INTO tblJournalEntryDetails
+        (Ser, JournalEntryID, AccountId, AccCode, JEPartyDis, Debit, Credit, CurrencyID, ExRate,
+         DocNum, Journal, CompCode, PeriodCode, InsertedDate, InsertedBy)
+      VALUES
+        (@ser, @jid, @accountId, @accCode, @text, @debit, @credit, 0, 1, @doc, @journal, 0, 1, GETDATE(), @actor)
+    `, [
+      { name: 'ser', type: sql.SmallInt, value: index + 1 },
+      { name: 'jid', type: sql.Numeric(18, 0), value: journalId },
+      { name: 'accountId', type: sql.Int, value: line.account.AccountId },
+      { name: 'accCode', type: sql.NVarChar(50), value: line.account.AccCode },
+      { name: 'text', type: sql.NVarChar(200), value: clip(line.text, 200) },
+      { name: 'debit', type: sql.Numeric(18, 4), value: line.debit },
+      { name: 'credit', type: sql.Numeric(18, 4), value: line.credit },
+      { name: 'doc', type: sql.Numeric(18, 0), value: docNo },
+      { name: 'journal', type: sql.NVarChar(10), value: journalCode }
+    ]);
+  }
+}
+
+async function rebuildJournal(tx, journalId, total, description, docNo, journalCode, rows) {
+  await txQuery(tx, `DELETE FROM tblJournalEntryDetails WHERE JournalEntryID = @id`, [
+    { name: 'id', type: sql.Numeric(18, 0), value: journalId }
+  ]);
+  await txQuery(tx, `
+    UPDATE tblJournalEntry
+    SET TotalDebit = @total, TotalCredit = @total, JournalEntryDis = @dis
+    WHERE JournalEntryID = @id
+  `, [
+    { name: 'id', type: sql.Numeric(18, 0), value: journalId },
+    { name: 'total', type: sql.Numeric(18, 4), value: total },
+    { name: 'dis', type: sql.NVarChar(250), value: clip(description, 250) }
+  ]);
+  await writeJournalLines(tx, journalId, docNo, journalCode, rows);
+}
+
+function mergeDebits(parts) {
+  const merged = [];
+  for (const part of parts) {
+    const found = merged.find((item) => item.account.AccCode === part.account.AccCode);
+    if (found) found.amount = roundTo(found.amount + part.amount, 4);
+    else merged.push({ account: part.account, amount: part.amount });
+  }
+  return merged;
+}
+
+async function latestCost(tx, productId) {
+  const costRow = await txQuery(tx, `
+    SELECT TOP 1 ISNULL(Cost, 0) AS cost
+    FROM tblInventory
+    WHERE ProductID = @pid AND Cost IS NOT NULL
+    ORDER BY ID DESC
+  `, [{ name: 'pid', type: sql.Numeric(18, 0), value: productId }]);
+  return costRow.recordset[0] ? Number(costRow.recordset[0].cost) : 0;
+}
+
 function returnLines(body) {
   const lines = Array.isArray(body.lines) ? body.lines : [];
   return lines.map((line) => ({ lineId: Number(line.lineId), qty: Number(line.qty) })).filter((line) => line.qty > 0);
@@ -1615,6 +1842,536 @@ async function ensureStore(tx, productId, storeId) {
     { name: 'store', type: sql.Numeric(18, 0), value: storeId }
   ]);
 }
+
+app.put('/api/sales/:id', requireAuth, async (req, res) => {
+  const invoiceId = Number(req.params.id);
+  const parsed = editLines(req.body && req.body.lines);
+  if (!invoiceId) return res.status(400).json({ error: 'الفاتورة غير موجودة' });
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const clientId = Number(req.body.clientId) || 0;
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const headerRow = await txQuery(tx, `
+      SELECT SellingInvoiceNo AS no, ClientID AS clientId, JournalEntryID AS journalId,
+        ISNULL(SellingInvoiceTotalAmount, 0) AS total, ISNULL(TotalCollectedAmount, 0) AS paid,
+        ISNULL(ReturnedAmount, 0) AS returnedAmount, ISNULL(TotalDiscountAmount, 0) AS discount,
+        ISNULL(ProductsDiscountAmount, 0) AS productsDiscount, ISNULL(SalesTaxTotalAmount, 0) AS tax,
+        ISNULL(AddedItptTotalAmount, 0) AS addedTax, ISNULL(ITPTAmount, 0) AS itpt,
+        ISNULL(TotalOnCollectDiscount, 0) AS collectDiscount
+      FROM tblSellingInvoice WITH (UPDLOCK, HOLDLOCK) WHERE SellingInvoiceID = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: invoiceId }]);
+    const header = headerRow.recordset[0];
+    if (!header) throw new Error('الفاتورة غير موجودة');
+    const existingRows = await txQuery(tx, `
+      SELECT id AS lineId, ProductID AS productId, StoreID AS storeId, OutQuantity AS qty,
+        ISNULL(ReturnedQuantity, 0) AS returned, RowGuid AS rowGuid
+      FROM tblSellingInvoicesDetails WITH (UPDLOCK, HOLDLOCK) WHERE SellingInvoiceID = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: invoiceId }]);
+    const existing = existingRows.recordset;
+    if (Number(header.returnedAmount) > 0.0001 || existing.some((line) => Number(line.returned) > 0.0001)) {
+      throw new Error('الفاتورة فيها مرتجع، لا يمكن تعديلها من هنا');
+    }
+    if ([header.discount, header.productsDiscount, header.tax, header.addedTax, header.itpt, header.collectDiscount].some((value) => Number(value) > 0.0001)) {
+      throw new Error('الفاتورة فيها خصم أو ضريبة، لا يمكن تعديلها من هنا');
+    }
+    if (!Number(header.journalId)) throw new Error('الفاتورة غير مربوطة بقيد محاسبي');
+    const payments = await txQuery(tx, `
+      SELECT c.SafeOperationID AS safeId, ISNULL(c.Collected, 0) AS collected, ISNULL(c.OnCollectDiscount, 0) AS discount,
+        s.JournalEntryID AS safeJournalId, s.SafeOperationDocumentNo AS safeNo
+      FROM tblSellingInvoicesCollectingDetails c
+      LEFT JOIN tblSafeOperations s ON s.OperationID = c.SafeOperationID
+      WHERE c.SellingInvoiceID = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: invoiceId }]);
+    if (payments.recordset.length > 1) throw new Error('الفاتورة لها أكثر من حركة تحصيل');
+    const payment = payments.recordset[0] || null;
+    if (payment && Number(payment.discount) > 0.0001) throw new Error('الفاتورة فيها خصم على التحصيل');
+    const paid = nextPaid(header.paid, header.total, parsed.total, Boolean(req.body.paid));
+    if (!payment && Number(header.paid) > 0.0001 && !moneyClose(paid, header.paid)) {
+      throw new Error('المبلغ المحصّل غير مربوط بحركة خزنة، لا يمكن تغيير حالة السداد');
+    }
+    const client = clientId
+      ? (await txQuery(tx, `SELECT ClientId, ISNULL(ClientName, N'') AS name, ISNULL(AccCode, N'') AS accCode FROM tblClients WHERE ClientId = @id`, [{ name: 'id', type: sql.Numeric(18, 0), value: clientId }])).recordset[0]
+      : { ClientId: 0, name: 'عميل نقدي', accCode: '' };
+    if (clientId && !client) throw new Error('العميل غير موجود');
+    const due = roundTo(parsed.total - paid, 4);
+    if (due > 0.0001 && clientId && !client.accCode) throw new Error('العميل ليس له كود حساب');
+    const salesAccount = await accountByCode(tx, '12210301');
+    const cashClearing = await accountByCode(tx, '1221010001');
+    const safeAccount = await accountByCode(tx, '12601');
+    const dueAccount = due > 0.0001 && clientId ? await accountByCode(tx, client.accCode) : cashClearing;
+    await assertStores(tx, parsed.lines.map((line) => line.storeId));
+    const plan = planLines(existing, parsed.lines);
+    for (const line of plan.deletes.concat(plan.updates)) await assertProduct(tx, line.productId);
+    for (const line of plan.inserts) await assertProduct(tx, line.productId);
+    for (const line of plan.deletes) {
+      await alignInventoryGuid(tx, 'tblSellingInvoicesDetails', line, header.no, 2, 'OutQuantity', 'ClientID', header.clientId);
+      const removed = await txQuery(tx, `DELETE FROM tblSellingInvoicesDetails WHERE id = @lineId AND SellingInvoiceID = @id`, [
+        { name: 'lineId', type: sql.Numeric(18, 0), value: line.lineId },
+        { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
+      ]);
+      assertOne(removed, 'تعذر حذف صنف من الفاتورة');
+    }
+    for (const line of plan.updates) {
+      const inventoryId = await alignInventoryGuid(tx, 'tblSellingInvoicesDetails', {
+        lineId: line.lineId, productId: line.productId, storeId: line.oldStore, qty: line.oldQty
+      }, header.no, 2, 'OutQuantity', 'ClientID', header.clientId);
+      await ensureStore(tx, line.productId, line.storeId);
+      const stock = await txQuery(tx, `
+        UPDATE tblInventory SET OutQuantity = @qty, LotPricePerUnit = @price, TotalLotPrice = @total,
+          StoreID = @store, ClientID = @clientId
+        WHERE ID = @invId AND TransactionID = 2
+      `, [
+        { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
+        { name: 'price', type: sql.Numeric(18, 4), value: line.price },
+        { name: 'total', type: sql.Numeric(18, 4), value: line.total },
+        { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
+        { name: 'clientId', type: sql.Numeric(18, 0), value: client.ClientId || 0 },
+        { name: 'invId', type: sql.Numeric(18, 0), value: inventoryId }
+      ]);
+      assertOne(stock, 'تعذر تحديث حركة المخزون');
+      const detail = await txQuery(tx, `
+        UPDATE tblSellingInvoicesDetails SET OutQuantity = @qty, StockQty = @qty, StoreID = @store,
+          LotPricePerUnit = @price, TotalPrice = @total, TotalPriceAfterDiscount = @total, TotalPricePerProduct = @total
+        WHERE id = @lineId AND SellingInvoiceID = @id
+      `, [
+        { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
+        { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
+        { name: 'price', type: sql.Numeric(18, 4), value: line.price },
+        { name: 'total', type: sql.Numeric(18, 4), value: line.total },
+        { name: 'lineId', type: sql.Numeric(18, 0), value: line.lineId },
+        { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
+      ]);
+      assertOne(detail, 'تعذر تحديث صنف الفاتورة');
+    }
+    for (const line of plan.inserts) {
+      const cost = await latestCost(tx, line.productId);
+      const guid = crypto.randomUUID();
+      await ensureStore(tx, line.productId, line.storeId);
+      await txQuery(tx, `
+        INSERT INTO tblInventory
+          (InvoiceNo, InvoiceDate, DocumentDate, ProductID, ClientID, StoreID, InQuantity, InBonus,
+           OutQuantity, OutBonus, LotPricePerUnit, TotalLotPrice, Cost, TransactionID, CompCode, RowGUID)
+        VALUES
+          (@invoiceNo, CAST(GETDATE() AS date), CAST(GETDATE() AS date), @pid, @clientId, @store, 0, 0,
+           @qty, 0, @price, @lineTotal, @cost, 2, 0, @guid)
+      `, [
+        { name: 'invoiceNo', type: sql.Numeric(18, 0), value: header.no },
+        { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
+        { name: 'clientId', type: sql.Numeric(18, 0), value: client.ClientId || 0 },
+        { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
+        { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
+        { name: 'price', type: sql.Numeric(18, 4), value: line.price },
+        { name: 'lineTotal', type: sql.Numeric(18, 4), value: line.total },
+        { name: 'cost', type: sql.Numeric(18, 4), value: cost },
+        { name: 'guid', type: sql.UniqueIdentifier, value: guid }
+      ]);
+      await txQuery(tx, `
+        INSERT INTO tblSellingInvoicesDetails
+          (SellingInvoiceID, ProductID, OutQuantity, OutBonus, UnitId, StockQty, ReturnedQuantity,
+           ReturnedStockQty, StoreID, LotPricePerUnit, SellingPricePerUnit, TotalPrice, DiscountType,
+           DiscountRatio, DiscountAmount, TotalPriceAfterDiscount, SalesTaxRatio, SalesTaxAmount,
+           ItptRatio, ItptAmount, AddedItptRatio, AddedItptAmount, TotalPricePerProduct, Cost,
+           RowGUID, InventoryDate, InsertedDate, InsertedBy)
+        VALUES
+          (@invoiceId, @pid, @qty, 0, 0, @qty, 0, 0, @store, @price, 0, @lineTotal, 0,
+           0, 0, @lineTotal, 0, 0, 0, 0, 0, 0, @lineTotal, @cost, @guid, CAST(GETDATE() AS date), GETDATE(), @actor)
+      `, [
+        { name: 'invoiceId', type: sql.Numeric(18, 0), value: invoiceId },
+        { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
+        { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
+        { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
+        { name: 'price', type: sql.Numeric(18, 4), value: line.price },
+        { name: 'lineTotal', type: sql.Numeric(18, 4), value: line.total },
+        { name: 'cost', type: sql.Numeric(18, 4), value: cost },
+        { name: 'guid', type: sql.UniqueIdentifier, value: guid }
+      ]);
+    }
+    if (payment && paid <= 0.0001) {
+      await txQuery(tx, `DELETE FROM tblSellingInvoicesCollectingDetails WHERE SellingInvoiceID = @id`, [
+        { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
+      ]);
+      if (payment.safeJournalId) {
+        await txQuery(tx, `DELETE FROM tblJournalEntryDetails WHERE JournalEntryID = @id`, [
+          { name: 'id', type: sql.Numeric(18, 0), value: payment.safeJournalId }
+        ]);
+      }
+      if (payment.safeId) {
+        await txQuery(tx, `DELETE FROM tblSafeOperations WHERE OperationID = @id`, [
+          { name: 'id', type: sql.Numeric(18, 0), value: payment.safeId }
+        ]);
+      }
+      if (payment.safeJournalId) {
+        await txQuery(tx, `DELETE FROM tblJournalEntry WHERE JournalEntryID = @id`, [
+          { name: 'id', type: sql.Numeric(18, 0), value: payment.safeJournalId }
+        ]);
+      }
+    }
+    await txQuery(tx, `
+      UPDATE tblSellingInvoice SET ClientID = @clientId, TotalProductsPrice = @total, TaxbaseAmount = @total,
+        SellingInvoiceTotalAmount = @total, TotalCollectedAmount = @paid
+      WHERE SellingInvoiceID = @id
+    `, [
+      { name: 'clientId', type: sql.Numeric(18, 0), value: client.ClientId || 0 },
+      { name: 'total', type: sql.Numeric(18, 4), value: parsed.total },
+      { name: 'paid', type: sql.Numeric(18, 4), value: paid },
+      { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
+    ]);
+    const saleText = `فاتورة بيع رقم (${header.no})`;
+    if (payment && paid > 0.0001) {
+      await txQuery(tx, `
+        UPDATE tblSellingInvoicesCollectingDetails
+        SET SellingInvoiceTotalAmount = @total, Collected = @paid, TotalCollectedAmount = @paid
+        WHERE SellingInvoiceID = @id
+      `, [
+        { name: 'total', type: sql.Numeric(18, 4), value: parsed.total },
+        { name: 'paid', type: sql.Numeric(18, 4), value: paid },
+        { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
+      ]);
+      if (payment.safeId) {
+        await txQuery(tx, `
+          UPDATE tblSafeOperations SET SafeOperationTotalAmount = @paid, AdjustedAmount = @paid, ClientID = @clientId
+          WHERE OperationID = @id
+        `, [
+          { name: 'paid', type: sql.Numeric(18, 4), value: paid },
+          { name: 'clientId', type: sql.Numeric(18, 0), value: client.ClientId || 0 },
+          { name: 'id', type: sql.Numeric(18, 0), value: payment.safeId }
+        ]);
+      }
+      if (!moneyClose(paid, payment.collected)) {
+        if (!payment.safeJournalId) throw new Error('حركة الخزنة غير مربوطة بقيد');
+        await rebuildJournal(tx, payment.safeJournalId, paid, `تحصيل ${saleText}`, payment.safeNo, 'SF', [
+          { account: safeAccount, debit: paid, credit: 0, text: `تحصيل ${saleText}` },
+          { account: cashClearing, debit: 0, credit: paid, text: `تحصيل ${saleText}` }
+        ]);
+      }
+    } else if (!payment && paid > 0.0001) {
+      const safeNo = await nextNumber(tx, 'tblSafeOperations', 'SafeOperationDocumentNo');
+      const safeJournalNo = await nextNumber(tx, 'tblJournalEntry', 'JournalEntryNo');
+      const safeText = `تحصيل ${saleText}`;
+      const safeJournal = await txQuery(tx, `
+        INSERT INTO tblJournalEntry
+          (JournalEntryNo, JournalEntryDis, JournalEntryDate, TotalDebit, TotalCredit, PeriodCode, CompCode,
+           LocalTotalDebit, LocalTotalCredit, IsSystem, Posted, BranchId, InsertedDate, InsertedBy, RowGuid)
+        VALUES (@no, @dis, GETDATE(), @total, @total, 1, 0, 0, 0, 1, 0, 0, GETDATE(), @actor, NEWID());
+        SELECT SCOPE_IDENTITY() AS id;
+      `, [
+        { name: 'no', type: sql.Numeric(18, 0), value: safeJournalNo },
+        { name: 'dis', type: sql.NVarChar(250), value: safeText },
+        { name: 'total', type: sql.Numeric(18, 4), value: paid }
+      ]);
+      await writeJournalLines(tx, safeJournal.recordset[0].id, safeNo, 'SF', [
+        { account: safeAccount, debit: paid, credit: 0, text: safeText },
+        { account: cashClearing, debit: 0, credit: paid, text: safeText }
+      ]);
+      const safe = await txQuery(tx, `
+        INSERT INTO tblSafeOperations
+          (SafeOperationTypeID, SafeOperationTotalAmount, CurrencyID, ExRate, Discount,
+           SafeOperationDate, SafeOperationDocumentNo, OperationDescription, ClientID, Cash, Cheques,
+           AdjustedAmount, Posted, JournalEntryID, PeriodID, SafeID, CompCode, BranchId, InsertedDate, InsertedBy)
+        VALUES (1, @total, 0, 1, 0, GETDATE(), @doc, @text, @clientId, 1, 0, @total, 1, @journalId, 1, 1, 0, 0, GETDATE(), @actor);
+        SELECT SCOPE_IDENTITY() AS id;
+      `, [
+        { name: 'total', type: sql.Numeric(18, 4), value: paid },
+        { name: 'doc', type: sql.Numeric(18, 0), value: safeNo },
+        { name: 'text', type: sql.NVarChar(250), value: safeText },
+        { name: 'clientId', type: sql.Numeric(18, 0), value: client.ClientId || 0 },
+        { name: 'journalId', type: sql.Numeric(18, 0), value: safeJournal.recordset[0].id }
+      ]);
+      await txQuery(tx, `
+        INSERT INTO tblSellingInvoicesCollectingDetails
+          (SellingInvoiceID, ClientID, SellingInvoiceTotalAmount, Collected, TotalCollectedAmount, OnCollectDiscount, TotalOnCollectDiscount, SafeOperationID)
+        VALUES (@invoiceId, @clientId, @total, @paid, @paid, 0, 0, @safeId)
+      `, [
+        { name: 'invoiceId', type: sql.Numeric(18, 0), value: invoiceId },
+        { name: 'clientId', type: sql.Numeric(18, 0), value: client.ClientId || 0 },
+        { name: 'total', type: sql.Numeric(18, 4), value: parsed.total },
+        { name: 'paid', type: sql.Numeric(18, 4), value: paid },
+        { name: 'safeId', type: sql.Numeric(18, 0), value: safe.recordset[0].id }
+      ]);
+    }
+    const debitParts = [];
+    if (paid > 0.0001) debitParts.push({ account: cashClearing, amount: paid });
+    if (due > 0.0001) debitParts.push({ account: dueAccount, amount: due });
+    await rebuildJournal(
+      tx, header.journalId, parsed.total,
+      clip(`${saleText} - (${client.name})`, 250),
+      header.no, 'SA',
+      mergeDebits(debitParts).map((part) => ({ account: part.account, debit: part.amount, credit: 0, text: saleText }))
+        .concat([{ account: salesAccount, debit: 0, credit: parsed.total, text: `مبيعات - (${client.name})` }])
+    );
+    await tx.commit();
+    memoryCache.clear();
+    recordActivity(req, { action: 'sale', detail: `تعديل فاتورة بيع رقم ${header.no} بإجمالي ${parsed.total}`, ref: `sale:${invoiceId}` });
+    res.json({ id: invoiceId, no: header.no, total: parsed.total });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: editError(error) });
+  }
+});
+
+app.put('/api/purchases/:id', requireAuth, async (req, res) => {
+  const invoiceId = Number(req.params.id);
+  const parsed = editLines(req.body && req.body.lines);
+  if (!invoiceId) return res.status(400).json({ error: 'الفاتورة غير موجودة' });
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const supplierId = Number(req.body.supplierId) || 0;
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const headerRow = await txQuery(tx, `
+      SELECT PurchaseInvoiceNo AS no, SupplierID AS supplierId, JournalEntryID AS journalId,
+        ISNULL(PurchaseInvoiceTotalAmount, 0) AS total, ISNULL(TotalPaiedAmount, 0) AS paid,
+        ISNULL(ReturnedAmount, 0) AS returnedAmount, ISNULL(TotalDiscountAmount, 0) AS discount,
+        ISNULL(ProductsDiscountAmount, 0) AS productsDiscount, ISNULL(SalesTaxTotalAmount, 0) AS tax,
+        ISNULL(AddedItptTotalAmount, 0) AS addedTax, ISNULL(ITPTAmount, 0) AS itpt,
+        ISNULL(TotalOnPaiedDiscount, 0) AS collectDiscount
+      FROM tblPurchaseInvoice WITH (UPDLOCK, HOLDLOCK) WHERE PurchaseInvoiceID = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: invoiceId }]);
+    const header = headerRow.recordset[0];
+    if (!header) throw new Error('الفاتورة غير موجودة');
+    const existingRows = await txQuery(tx, `
+      SELECT Id AS lineId, ProductID AS productId, StoreID AS storeId, InQuantity AS qty,
+        ISNULL(ReturnedQuantity, 0) AS returned, RowGuid AS rowGuid
+      FROM tblPurchaseInvoicesDetails WITH (UPDLOCK, HOLDLOCK) WHERE PurchaseInvoiceID = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: invoiceId }]);
+    const existing = existingRows.recordset;
+    if (Number(header.returnedAmount) > 0.0001 || existing.some((line) => Number(line.returned) > 0.0001)) {
+      throw new Error('الفاتورة فيها مرتجع، لا يمكن تعديلها من هنا');
+    }
+    if ([header.discount, header.productsDiscount, header.tax, header.addedTax, header.itpt, header.collectDiscount].some((value) => Number(value) > 0.0001)) {
+      throw new Error('الفاتورة فيها خصم أو ضريبة، لا يمكن تعديلها من هنا');
+    }
+    if (!Number(header.journalId)) throw new Error('الفاتورة غير مربوطة بقيد محاسبي');
+    const payments = await txQuery(tx, `
+      SELECT p.SafeOperationID AS safeId, ISNULL(p.Paied, 0) AS collected, ISNULL(p.OnPaiedDiscount, 0) AS discount,
+        s.JournalEntryID AS safeJournalId, s.SafeOperationDocumentNo AS safeNo
+      FROM tblPurchaseInvoicesPayingDetails p
+      LEFT JOIN tblSafeOperations s ON s.OperationID = p.SafeOperationID
+      WHERE p.PurchaseInvoiceID = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: invoiceId }]);
+    if (payments.recordset.length > 1) throw new Error('الفاتورة لها أكثر من حركة سداد');
+    const payment = payments.recordset[0] || null;
+    if (payment && Number(payment.discount) > 0.0001) throw new Error('الفاتورة فيها خصم على السداد');
+    const paid = nextPaid(header.paid, header.total, parsed.total, Boolean(req.body.paid));
+    if (!payment && Number(header.paid) > 0.0001 && !moneyClose(paid, header.paid)) {
+      throw new Error('المبلغ المدفوع غير مربوط بحركة خزنة، لا يمكن تغيير حالة السداد');
+    }
+    const supplier = supplierId
+      ? (await txQuery(tx, `SELECT SupplierID, ISNULL(SupplierName, N'') AS name, ISNULL(AccCode, N'') AS accCode FROM tblSuppliers WHERE SupplierID = @id`, [{ name: 'id', type: sql.Numeric(18, 0), value: supplierId }])).recordset[0]
+      : { SupplierID: 0, name: 'مشتريات نقدية', accCode: '2423' };
+    if (supplierId && !supplier) throw new Error('المورد غير موجود');
+    const counterCode = supplier.SupplierID ? supplier.accCode : '2423';
+    if (!counterCode) throw new Error('المورد ليس له كود حساب');
+    const purchasesAccount = await accountByCode(tx, '2424');
+    const safeAccount = await accountByCode(tx, '12601');
+    const counterAccount = await accountByCode(tx, counterCode);
+    await assertStores(tx, parsed.lines.map((line) => line.storeId));
+    const plan = planLines(existing, parsed.lines);
+    for (const line of plan.deletes.concat(plan.updates, plan.inserts)) await assertProduct(tx, line.productId);
+    for (const line of plan.deletes) {
+      await alignInventoryGuid(tx, 'tblPurchaseInvoicesDetails', line, header.no, 1, 'InQuantity', 'SupplierID', header.supplierId);
+      const removed = await txQuery(tx, `DELETE FROM tblPurchaseInvoicesDetails WHERE Id = @lineId AND PurchaseInvoiceID = @id`, [
+        { name: 'lineId', type: sql.Numeric(18, 0), value: line.lineId },
+        { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
+      ]);
+      assertOne(removed, 'تعذر حذف صنف من الفاتورة');
+    }
+    for (const line of plan.updates) {
+      const inventoryId = await alignInventoryGuid(tx, 'tblPurchaseInvoicesDetails', {
+        lineId: line.lineId, productId: line.productId, storeId: line.oldStore, qty: line.oldQty
+      }, header.no, 1, 'InQuantity', 'SupplierID', header.supplierId);
+      await ensureStore(tx, line.productId, line.storeId);
+      const stock = await txQuery(tx, `
+        UPDATE tblInventory SET InQuantity = @qty, PurchasePricePerUnit = @price, StoreID = @store, SupplierID = @supplierId
+        WHERE ID = @invId AND TransactionID = 1
+      `, [
+        { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
+        { name: 'price', type: sql.Numeric(18, 4), value: line.price },
+        { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
+        { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
+        { name: 'invId', type: sql.Numeric(18, 0), value: inventoryId }
+      ]);
+      assertOne(stock, 'تعذر تحديث حركة المخزون');
+      const detail = await txQuery(tx, `
+        UPDATE tblPurchaseInvoicesDetails SET InQuantity = @qty, StockQty = @qty, StoreID = @store, PurchasePrice = @price,
+          TotalPrice = @total, TotalPriceAfterDiscount = @total, TotalPricePerProduct = @total
+        WHERE Id = @lineId AND PurchaseInvoiceID = @id
+      `, [
+        { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
+        { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
+        { name: 'price', type: sql.Numeric(18, 4), value: line.price },
+        { name: 'total', type: sql.Numeric(18, 4), value: line.total },
+        { name: 'lineId', type: sql.Numeric(18, 0), value: line.lineId },
+        { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
+      ]);
+      assertOne(detail, 'تعذر تحديث صنف الفاتورة');
+    }
+    for (const line of plan.inserts) {
+      const guid = crypto.randomUUID();
+      await ensureStore(tx, line.productId, line.storeId);
+      await txQuery(tx, `
+        INSERT INTO tblInventory
+          (InvoiceNo, InvoiceDate, DocumentDate, ProductID, SupplierID, StoreID, InQuantity, InBonus,
+           OutQuantity, OutBonus, PurchasePricePerUnit, Cost, TransactionID, CompCode, RowGUID)
+        VALUES
+          (@invoiceNo, CAST(GETDATE() AS date), CAST(GETDATE() AS date), @pid, @supplierId, @store, @qty, 0,
+           0, 0, @price, @price, 1, 0, @guid)
+      `, [
+        { name: 'invoiceNo', type: sql.Numeric(18, 0), value: header.no },
+        { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
+        { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
+        { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
+        { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
+        { name: 'price', type: sql.Numeric(18, 4), value: line.price },
+        { name: 'guid', type: sql.UniqueIdentifier, value: guid }
+      ]);
+      await txQuery(tx, `
+        INSERT INTO tblPurchaseInvoicesDetails
+          (PurchaseInvoiceID, ProductID, InQuantity, InBonus, UnitId, StockQty, ReturnedQuantity,
+           ReturnedStockQty, StoreID, PurchasePrice, TotalPrice, DiscountType, DiscountRatio, DiscountAmount,
+           TotalPriceAfterDiscount, SalesTaxRatio, SalesTaxAmount, ItptRatio, ItptAmount, AddedItptRatio,
+           AddedItptAmount, TotalPricePerProduct, Cost, RowGUID, InventoryDate, InsertedDate, InsertedBy)
+        VALUES
+          (@invoiceId, @pid, @qty, 0, 0, @qty, 0, 0, @store, @price, @lineTotal, 0, 0, 0,
+           @lineTotal, 0, 0, 0, 0, 0, 0, @lineTotal, @price, @guid, CAST(GETDATE() AS date), GETDATE(), @actor)
+      `, [
+        { name: 'invoiceId', type: sql.Numeric(18, 0), value: invoiceId },
+        { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
+        { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
+        { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
+        { name: 'price', type: sql.Numeric(18, 4), value: line.price },
+        { name: 'lineTotal', type: sql.Numeric(18, 4), value: line.total },
+        { name: 'guid', type: sql.UniqueIdentifier, value: guid }
+      ]);
+    }
+    if (payment && paid <= 0.0001) {
+      await txQuery(tx, `DELETE FROM tblPurchaseInvoicesPayingDetails WHERE PurchaseInvoiceID = @id`, [
+        { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
+      ]);
+      if (payment.safeJournalId) {
+        await txQuery(tx, `DELETE FROM tblJournalEntryDetails WHERE JournalEntryID = @id`, [
+          { name: 'id', type: sql.Numeric(18, 0), value: payment.safeJournalId }
+        ]);
+      }
+      if (payment.safeId) {
+        await txQuery(tx, `DELETE FROM tblSafeOperations WHERE OperationID = @id`, [
+          { name: 'id', type: sql.Numeric(18, 0), value: payment.safeId }
+        ]);
+      }
+      if (payment.safeJournalId) {
+        await txQuery(tx, `DELETE FROM tblJournalEntry WHERE JournalEntryID = @id`, [
+          { name: 'id', type: sql.Numeric(18, 0), value: payment.safeJournalId }
+        ]);
+      }
+    }
+    await txQuery(tx, `
+      UPDATE tblPurchaseInvoice SET SupplierID = @supplierId, TotalProductsPrice = @total, TaxbaseAmount = @total,
+        PurchaseInvoiceTotalAmount = @total, TotalPaiedAmount = @paid
+      WHERE PurchaseInvoiceID = @id
+    `, [
+      { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
+      { name: 'total', type: sql.Numeric(18, 4), value: parsed.total },
+      { name: 'paid', type: sql.Numeric(18, 4), value: paid },
+      { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
+    ]);
+    const purchaseText = `فاتورة شراء رقم (${header.no})`;
+    if (payment && paid > 0.0001) {
+      await txQuery(tx, `
+        UPDATE tblPurchaseInvoicesPayingDetails
+        SET PurchaseInvoiceTotalAmount = @total, Paied = @paid, TotalPaiedAmount = @paid
+        WHERE PurchaseInvoiceID = @id
+      `, [
+        { name: 'total', type: sql.Numeric(18, 4), value: parsed.total },
+        { name: 'paid', type: sql.Numeric(18, 4), value: paid },
+        { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
+      ]);
+      if (payment.safeId) {
+        await txQuery(tx, `
+          UPDATE tblSafeOperations SET SafeOperationTotalAmount = @paid, AdjustedAmount = @paid, SupplierID = @supplierId
+          WHERE OperationID = @id
+        `, [
+          { name: 'paid', type: sql.Numeric(18, 4), value: paid },
+          { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
+          { name: 'id', type: sql.Numeric(18, 0), value: payment.safeId }
+        ]);
+      }
+      if (!moneyClose(paid, payment.collected)) {
+        if (!payment.safeJournalId) throw new Error('حركة الخزنة غير مربوطة بقيد');
+        await rebuildJournal(tx, payment.safeJournalId, paid, `سداد ${purchaseText}`, payment.safeNo, 'SF', [
+          { account: counterAccount, debit: paid, credit: 0, text: `سداد ${purchaseText}` },
+          { account: safeAccount, debit: 0, credit: paid, text: `سداد ${purchaseText}` }
+        ]);
+      }
+    } else if (!payment && paid > 0.0001) {
+      const safeNo = await nextNumber(tx, 'tblSafeOperations', 'SafeOperationDocumentNo');
+      const safeJournalNo = await nextNumber(tx, 'tblJournalEntry', 'JournalEntryNo');
+      const safeText = `سداد ${purchaseText}`;
+      const safeJournal = await txQuery(tx, `
+        INSERT INTO tblJournalEntry
+          (JournalEntryNo, JournalEntryDis, JournalEntryDate, TotalDebit, TotalCredit, PeriodCode, CompCode,
+           LocalTotalDebit, LocalTotalCredit, IsSystem, Posted, BranchId, InsertedDate, InsertedBy, RowGuid)
+        VALUES (@no, @dis, GETDATE(), @total, @total, 1, 0, 0, 0, 1, 0, 0, GETDATE(), @actor, NEWID());
+        SELECT SCOPE_IDENTITY() AS id;
+      `, [
+        { name: 'no', type: sql.Numeric(18, 0), value: safeJournalNo },
+        { name: 'dis', type: sql.NVarChar(250), value: safeText },
+        { name: 'total', type: sql.Numeric(18, 4), value: paid }
+      ]);
+      await writeJournalLines(tx, safeJournal.recordset[0].id, safeNo, 'SF', [
+        { account: counterAccount, debit: paid, credit: 0, text: safeText },
+        { account: safeAccount, debit: 0, credit: paid, text: safeText }
+      ]);
+      const safe = await txQuery(tx, `
+        INSERT INTO tblSafeOperations
+          (SafeOperationTypeID, SafeOperationTotalAmount, CurrencyID, ExRate, Discount,
+           SafeOperationDate, SafeOperationDocumentNo, OperationDescription, SupplierID, Cash, Cheques,
+           AdjustedAmount, Posted, JournalEntryID, PeriodID, SafeID, CompCode, BranchId, InsertedDate, InsertedBy)
+        VALUES (2, @total, 0, 1, 0, GETDATE(), @doc, @text, @supplierId, 1, 0, @total, 1, @journalId, 1, 1, 0, 0, GETDATE(), @actor);
+        SELECT SCOPE_IDENTITY() AS id;
+      `, [
+        { name: 'total', type: sql.Numeric(18, 4), value: paid },
+        { name: 'doc', type: sql.Numeric(18, 0), value: safeNo },
+        { name: 'text', type: sql.NVarChar(250), value: safeText },
+        { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
+        { name: 'journalId', type: sql.Numeric(18, 0), value: safeJournal.recordset[0].id }
+      ]);
+      await txQuery(tx, `
+        INSERT INTO tblPurchaseInvoicesPayingDetails
+          (PurchaseInvoiceID, SupplierID, PurchaseInvoiceTotalAmount, Paied, TotalPaiedAmount, OnPaiedDiscount, TotalOnPaiedDiscount, SafeOperationID)
+        VALUES (@invoiceId, @supplierId, @total, @paid, @paid, 0, 0, @safeId)
+      `, [
+        { name: 'invoiceId', type: sql.Numeric(18, 0), value: invoiceId },
+        { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
+        { name: 'total', type: sql.Numeric(18, 4), value: parsed.total },
+        { name: 'paid', type: sql.Numeric(18, 4), value: paid },
+        { name: 'safeId', type: sql.Numeric(18, 0), value: safe.recordset[0].id }
+      ]);
+    }
+    await rebuildJournal(
+      tx, header.journalId, parsed.total,
+      clip(`${purchaseText} - (${supplier.name})`, 250),
+      header.no, 'PU',
+      [
+        { account: purchasesAccount, debit: parsed.total, credit: 0, text: purchaseText },
+        { account: counterAccount, debit: 0, credit: parsed.total, text: `مشتريات - (${supplier.name})` }
+      ]
+    );
+    await tx.commit();
+    memoryCache.clear();
+    recordActivity(req, { action: 'purchase', detail: `تعديل فاتورة شراء رقم ${header.no} بإجمالي ${parsed.total}`, ref: `purchase:${invoiceId}` });
+    res.json({ id: invoiceId, no: header.no, total: parsed.total });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: editError(error) });
+  }
+});
 
 app.post('/api/sales/:id/return', requireAuth, async (req, res) => {
   const invoiceId = Number(req.params.id);
