@@ -1,0 +1,45 @@
+{
+  "name": "ramzy-erp",
+  "version": "1.0.0",
+  "description": "AL RAMZY BROTHERS desktop window for the live ERP",
+  "main": "main.js",
+  "author": "AL RAMZY BROTHERS",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^35.7.5",
+    "electron-builder": "^25.1.8",
+    "png-to-ico": "^2.1.8"
+  },
+  "build": {
+    "appId": "com.alramzybrothers.erp",
+    "productName": "RamzyERP",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "offline.html",
+      "icon.ico",
+      "icon.png"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "icon.ico",
+      "executableName": "RamzyERP"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "الرمزي",
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico",
+      "artifactName": "RamzyERP-Setup.${ext}"
+    }
+  }
+}

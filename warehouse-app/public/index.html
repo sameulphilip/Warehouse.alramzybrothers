@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>AL RAMZY ERP</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css?v=20261007m">
+</head>
+<body>
+  <section id="loginView" class="login-wrap">
+    <div class="login-stage">
+      <aside class="login-brand">
+        <img src="/logo.png" alt="AL RAMZY BROTHERS" class="logo">
+        <h1>إدارة فروع الرمزي</h1>
+        <p>مخزون القطع، فواتير البيع والشراء، وحسابات العملاء من شاشة واحدة.</p>
+        <ul>
+          <li>رصيد كل مخزن لحظة بلحظة</li>
+          <li>فواتير البيع والشراء مع أصنافها</li>
+          <li>تسجيل فاتورة بيع أو شراء على النظام الأصلي</li>
+        </ul>
+      </aside>
+      <form id="loginForm" class="login-card">
+        <p class="eyebrow">دخول المديرين</p>
+        <h2>مرحباً بعودتك</h2>
+        <label>اسم المستخدم<span class="field"><input id="user" autocomplete="username" required></span></label>
+        <label>كلمة السر<span class="field"><input id="password" type="password" autocomplete="current-password" required></span></label>
+        <button type="submit">دخول إلى النظام</button>
+        <div id="loginError" class="error"></div>
+      </form>
+    </div>
+  </section>
+
+  <div id="appView" class="shell hidden">
+    <aside class="side">
+      <div class="brand">
+        <img src="/logo.png" alt="AL RAMZY BROTHERS">
+        <strong>RAMZY ERP</strong>
+      </div>
+      <nav id="nav"></nav>
+      <button id="logoutBtn" class="ghost" type="button">تسجيل الخروج</button>
+    </aside>
+    <div class="workspace">
+      <header class="top">
+        <button id="menuBtn" class="ghost menu-btn" type="button" aria-label="القائمة"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+        <div>
+          <h2 id="title">لوحة التحكم</h2>
+          <p id="subtitle"></p>
+        </div>
+        <span id="who"></span>
+      </header>
+      <main id="content"></main>
+    </div>
+  </div>
+  <nav class="dock" id="bottomNav">
+    <button type="button" data-id="dashboard">لوحة</button>
+    <button type="button" data-id="stock">مخزون</button>
+    <button type="button" data-id="products">منتجات</button>
+    <button type="button" data-id="newSale">بيع</button>
+    <button type="button" data-id="sales">فواتير</button>
+    <button type="button" id="moreBtn">المزيد</button>
+  </nav>
+  <div id="scrim" class="scrim hidden"></div>
+  <div id="drawer" class="drawer hidden"></div>
+  <script src="/app.js?v=20261007m"></script>
+</body>
+</html>

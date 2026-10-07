@@ -1,0 +1,2332 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AL RAMZY BROTHERS - Trading and Importing Automotive Spare Parts</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: #ffffff;
+            color: #333;
+            padding: 20px 40px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .header-logo {
+            max-width: 700px;
+            max-height: 280px;
+            margin: 0;
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));
+            width: auto;
+            height: auto;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .section {
+            margin-bottom: 50px;
+        }
+
+        .section-title {
+            font-size: 1.8em;
+            color: #667eea;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #667eea;
+            display: flex;
+            align-items: center;
+        }
+
+        .section-title::before {
+            content: "📊";
+            margin-left: 10px;
+            font-size: 1.2em;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
+            transition: box-shadow 0.3s ease;
+            cursor: default;
+        }
+
+        .stat-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .stat-card .number {
+            font-size: 1.8em;
+            font-weight: bold;
+            margin: 5px 0;
+        }
+
+        .stat-card .label {
+            font-size: 0.9em;
+            opacity: 0.9;
+        }
+
+        .stat-card .icon {
+            font-size: 1.5em;
+            margin-bottom: 5px;
+        }
+
+        .modules-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .module-card {
+            background: #f8f9fa;
+            border: 2px solid #e9ecef;
+            border-radius: 15px;
+            padding: 20px;
+            transition: all 0.3s ease;
+        }
+
+        .module-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.2);
+            transform: translateY(-3px);
+        }
+
+        .module-card h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+            display: flex;
+            align-items: center;
+        }
+
+        .module-card h3::before {
+            content: "📦";
+            margin-left: 10px;
+        }
+
+        .module-card ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .module-card li {
+            padding: 8px 0;
+            border-bottom: 1px solid #e9ecef;
+            color: #555;
+        }
+
+        .module-card li:last-child {
+            border-bottom: none;
+        }
+
+        .module-card li::before {
+            content: "✓ ";
+            color: #667eea;
+            font-weight: bold;
+        }
+
+        .tables-section {
+            background: #f8f9fa;
+            padding: 30px;
+            border-radius: 15px;
+            margin-top: 30px;
+        }
+
+        .tables-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+            max-height: 600px;
+            overflow-y: auto;
+            padding: 20px;
+            background: white;
+            border-radius: 10px;
+        }
+
+        .table-item {
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+            font-size: 0.9em;
+            transition: all 0.2s ease;
+            cursor: pointer;
+        }
+
+        .table-item:hover {
+            background: #667eea;
+            color: white;
+            transform: scale(1.05);
+        }
+
+        .search-box {
+            width: 100%;
+            padding: 15px;
+            font-size: 1.1em;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            transition: border-color 0.3s ease;
+        }
+
+        .search-box:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed !important;
+            background: #ccc !important;
+        }
+
+        button:disabled:hover {
+            transform: none !important;
+        }
+
+        .footer {
+            background: #2c3e50;
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: bold;
+            margin: 5px;
+        }
+
+        .badge-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .badge-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .badge-info {
+            background: #17a2b8;
+            color: white;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.8em;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .modules-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .icon {
+            font-size: 1.5em;
+            margin-bottom: 5px;
+        }
+
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.7);
+            animation: fadeIn 0.3s;
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 20px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            animation: slideDown 0.3s;
+        }
+
+        .modal-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 20px 20px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 1.8em;
+        }
+
+        .close {
+            color: white;
+            font-size: 35px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .close:hover {
+            transform: scale(1.2);
+        }
+
+        .modal-body {
+            padding: 30px;
+        }
+
+        .detail-item {
+            background: #f8f9fa;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-radius: 10px;
+            border-right: 4px solid #667eea;
+        }
+
+        .detail-item h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 1.2em;
+        }
+
+        .detail-item p {
+            color: #555;
+            line-height: 1.8;
+            margin: 5px 0;
+        }
+
+        .detail-item ul {
+            list-style: none;
+            padding: 0;
+            margin-top: 10px;
+        }
+
+        .detail-item li {
+            padding: 8px 0;
+            border-bottom: 1px solid #e9ecef;
+            color: #555;
+        }
+
+        .detail-item li:last-child {
+            border-bottom: none;
+        }
+
+        .detail-item li::before {
+            content: "▸ ";
+            color: #667eea;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideDown {
+            from {
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .tab-content {
+            animation: fadeIn 0.3s;
+        }
+
+        .tab-btn.active {
+            background: #667eea !important;
+            color: white !important;
+        }
+
+        table tbody tr {
+            transition: background-color 0.2s;
+        }
+
+        table tbody tr:hover {
+            background-color: #f8f9fa;
+        }
+
+        table tbody td {
+            padding: 12px;
+            border: 1px solid #e9ecef;
+            text-align: right;
+        }
+
+        table tbody tr:nth-child(even) {
+            background-color: #f8f9fa;
+        }
+
+        /* Sticky table headers - make all table headers stick to top when scrolling */
+        thead {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        thead th {
+            position: sticky;
+            top: 0;
+            z-index: 101;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+            color: white !important;
+            font-weight: 700 !important;
+            font-size: 0.95em !important;
+            padding: 16px 12px !important;
+            text-align: right !important;
+            border: none !important;
+            border-bottom: 3px solid rgba(255, 255, 255, 0.3) !important;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15), 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2) !important;
+            letter-spacing: 0.5px !important;
+            transition: all 0.3s ease !important;
+        }
+
+        thead th:first-child {
+            border-top-right-radius: 8px;
+        }
+
+        thead th:last-child {
+            border-top-left-radius: 8px;
+        }
+
+        thead tr:hover th {
+            background: linear-gradient(135deg, #7a8ef0 0%, #8a5fb8 100%) !important;
+        }
+
+        /* Filter row styles */
+        .filter-row {
+            background: #f8f9fa !important;
+            position: sticky;
+            top: 60px;
+            z-index: 99;
+        }
+
+        .filter-row td {
+            padding: 8px !important;
+            background: #f8f9fa !important;
+            border: 1px solid #e9ecef !important;
+        }
+
+        .filter-input {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.85em;
+            background: white;
+        }
+
+        .filter-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+        }
+
+        .filter-select {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.85em;
+            background: white;
+            cursor: pointer;
+        }
+
+        .filter-select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+        }
+
+        .clear-filters-btn {
+            padding: 8px 16px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9em;
+            margin-top: 10px;
+            margin-bottom: 10px;
+        }
+
+        .clear-filters-btn:hover {
+            background: #c82333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <img src="assets/logo.png" alt="AL RAMZY BROTHERS Logo" class="header-logo" onerror="this.style.display='none'">
+        </div>
+
+        <div class="content">
+            <!-- الإحصائيات الرئيسية -->
+            <div class="section">
+                <h2 class="section-title">📈 الإحصائيات الرئيسية</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="icon">📊</div>
+                        <div class="number">230</div>
+                        <div class="label">جدول</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="icon">📦</div>
+                        <div class="number">24,777</div>
+                        <div class="label">منتج</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="icon">👥</div>
+                        <div class="number">320</div>
+                        <div class="label">عميل</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="icon">🏢</div>
+                        <div class="number">272</div>
+                        <div class="label">مورد</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="icon">🧾</div>
+                        <div class="number">12,587</div>
+                        <div class="label">فواتير بيع</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="icon">📋</div>
+                        <div class="number">4,899</div>
+                        <div class="label">فواتير شراء</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="icon">📝</div>
+                        <div class="number">23,552</div>
+                        <div class="label">قيود محاسبية</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="icon">🏪</div>
+                        <div class="number">8</div>
+                        <div class="label">مخزن</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- المنتجات والعملاء -->
+            <div class="section">
+                <h2 class="section-title">📦 المنتجات والعملاء</h2>
+                
+                <!-- تبويبات -->
+                <div style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #e9ecef;">
+                    <button class="tab-btn active" onclick="showTab('products')" style="padding: 15px 30px; background: #667eea; color: white; border: none; border-radius: 10px 10px 0 0; cursor: pointer; font-size: 1.1em; font-weight: bold;">
+                        📦 المنتجات مع الكميات
+                    </button>
+                    <button class="tab-btn" onclick="showTab('clients')" style="padding: 15px 30px; background: #e9ecef; color: #667eea; border: none; border-radius: 10px 10px 0 0; cursor: pointer; font-size: 1.1em; font-weight: bold;">
+                        👥 العملاء
+                    </button>
+                    <button class="tab-btn" onclick="showTab('suppliers')" style="padding: 15px 30px; background: #e9ecef; color: #667eea; border: none; border-radius: 10px 10px 0 0; cursor: pointer; font-size: 1.1em; font-weight: bold;">
+                        🏢 الموردين
+                    </button>
+                    <button class="tab-btn" onclick="showTab('sellingInvoices')" style="padding: 15px 30px; background: #e9ecef; color: #667eea; border: none; border-radius: 10px 10px 0 0; cursor: pointer; font-size: 1.1em; font-weight: bold;">
+                        🧾 فواتير البيع
+                    </button>
+                    <button class="tab-btn" onclick="showTab('purchaseInvoices')" style="padding: 15px 30px; background: #e9ecef; color: #667eea; border: none; border-radius: 10px 10px 0 0; cursor: pointer; font-size: 1.1em; font-weight: bold;">
+                        📋 فواتير الشراء
+                    </button>
+                    <button class="tab-btn" onclick="showTab('stores')" style="padding: 15px 30px; background: #e9ecef; color: #667eea; border: none; border-radius: 10px 10px 0 0; cursor: pointer; font-size: 1.1em; font-weight: bold;">
+                        🏪 المخازن
+                    </button>
+                    <button class="tab-btn" onclick="showTab('stockByStore')" style="padding: 15px 30px; background: #e9ecef; color: #667eea; border: none; border-radius: 10px 10px 0 0; cursor: pointer; font-size: 1.1em; font-weight: bold;">
+                        📦 مخزون حسب المخزن
+                    </button>
+                </div>
+
+                <!-- قسم المنتجات -->
+                <div id="productsTab" class="tab-content">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px;">
+                        <input type="text" class="search-box" id="productSearch" placeholder="🔍 ابحث عن منتج (بالكود أو الاسم)..." style="flex: 1; min-width: 200px; margin-left: 10px;">
+                        <select id="productStoreFilter" onchange="applyStoreFilter()" style="padding: 10px 15px; border: 2px solid #e9ecef; border-radius: 10px; font-size: 1em; min-width: 200px; background: white; cursor: pointer;">
+                            <option value="">🏪 جميع المخازن</option>
+                        </select>
+                        <div style="color: #667eea; font-weight: bold; white-space: nowrap;">
+                            إجمالي المنتجات: <span id="productsCount">0</span> | 
+                            عرض: <span id="productsShowing">0</span>
+                        </div>
+                    </div>
+                    <div style="background: white; border-radius: 10px; padding: 20px; max-height: 600px; overflow-y: auto; overflow-x: auto;">
+                        <table id="productsTable" style="width: 100%; border-collapse: collapse; font-size: 0.9em; min-width: 1400px;">
+                            <thead>
+                                <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">#</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">كود المنتج</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">اسم المنتج</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">الكمية في المخزون</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">المخازن</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">إجمالي المخزون</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">حد إعادة الطلب</th>
+                                </tr>
+                            </thead>
+                            <tbody id="productsTableBody">
+                                <tr><td colspan="7" style="text-align: center; padding: 20px; color: #999;">جارٍ تحميل البيانات...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="productsPagination" style="display: flex; justify-content: center; align-items: center; gap: 10px; margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+                        <button id="productsPrevBtn" onclick="changeProductsPage(-1)" style="padding: 8px 16px; background: #667eea; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">السابق</button>
+                        <span id="productsPageInfo" style="color: #667eea; font-weight: bold;">صفحة 1 من 1</span>
+                        <button id="productsNextBtn" onclick="changeProductsPage(1)" style="padding: 8px 16px; background: #667eea; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">التالي</button>
+                        <select id="productsPageSize" onchange="changeProductsPageSize()" style="padding: 8px; border: 1px solid #ddd; border-radius: 5px; margin-right: 10px;">
+                            <option value="50">50 لكل صفحة</option>
+                            <option value="100" selected>100 لكل صفحة</option>
+                            <option value="200">200 لكل صفحة</option>
+                            <option value="500">500 لكل صفحة</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- قسم العملاء -->
+                <div id="clientsTab" class="tab-content" style="display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <input type="text" class="search-box" id="clientSearch" placeholder="🔍 ابحث عن عميل..." style="flex: 1; margin-left: 10px;">
+                        <div style="color: #667eea; font-weight: bold;">
+                            إجمالي العملاء: <span id="clientsCount">0</span>
+                        </div>
+                    </div>
+                    <div style="background: white; border-radius: 10px; padding: 20px; max-height: 600px; overflow-y: auto;">
+                        <table id="clientsTable" style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                                    <th style="padding: 15px; text-align: right; border: 1px solid #ddd;">#</th>
+                                    <th style="padding: 15px; text-align: right; border: 1px solid #ddd;">رقم العميل</th>
+                                    <th style="padding: 15px; text-align: right; border: 1px solid #ddd;">اسم العميل</th>
+                                    <th style="padding: 15px; text-align: right; border: 1px solid #ddd;">مندوب المبيعات</th>
+                                    <th style="padding: 15px; text-align: right; border: 1px solid #ddd;">المنطقة</th>
+                                </tr>
+                            </thead>
+                            <tbody id="clientsTableBody">
+                                <tr><td colspan="5" style="text-align: center; padding: 20px; color: #999;">جارٍ تحميل البيانات...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- قسم الموردين -->
+                <div id="suppliersTab" class="tab-content" style="display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <input type="text" class="search-box" id="supplierSearch" placeholder="🔍 ابحث عن مورد..." style="flex: 1; margin-left: 10px;">
+                        <div style="color: #667eea; font-weight: bold;">
+                            إجمالي الموردين: <span id="suppliersCount">0</span>
+                        </div>
+                    </div>
+                    <div style="background: white; border-radius: 10px; padding: 20px; max-height: 600px; overflow-y: auto;">
+                        <table id="suppliersTable" style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                                    <th style="padding: 15px; text-align: right; border: 1px solid #ddd;">#</th>
+                                    <th style="padding: 15px; text-align: right; border: 1px solid #ddd;">رقم المورد</th>
+                                    <th style="padding: 15px; text-align: right; border: 1px solid #ddd;">اسم المورد</th>
+                                    <th style="padding: 15px; text-align: right; border: 1px solid #ddd;">البلد</th>
+                                    <th style="padding: 15px; text-align: right; border: 1px solid #ddd;">البريد الإلكتروني</th>
+                                </tr>
+                            </thead>
+                            <tbody id="suppliersTableBody">
+                                <tr><td colspan="5" style="text-align: center; padding: 20px; color: #999;">جارٍ تحميل البيانات...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- قسم فواتير البيع -->
+                <div id="sellingInvoicesTab" class="tab-content" style="display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <input type="text" class="search-box" id="sellingInvoiceSearch" placeholder="🔍 ابحث عن فاتورة (بالرقم أو العميل)..." style="flex: 1; margin-left: 10px;">
+                        <div style="color: #667eea; font-weight: bold;">
+                            إجمالي الفواتير: <span id="sellingInvoicesCount">0</span>
+                        </div>
+                    </div>
+                    <div style="background: white; border-radius: 10px; padding: 20px; max-height: 600px; overflow-y: auto; overflow-x: auto;">
+                        <table id="sellingInvoicesTable" style="width: 100%; border-collapse: collapse; font-size: 0.9em; min-width: 1000px;">
+                            <thead>
+                                <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">#</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">رقم الفاتورة</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">تاريخ الفاتورة</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">رقم العميل</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">اسم العميل</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">إجمالي الفاتورة</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">المدفوع</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">المتبقي</th>
+                                </tr>
+                            </thead>
+                            <tbody id="sellingInvoicesTableBody">
+                                <tr><td colspan="8" style="text-align: center; padding: 20px; color: #999;">جارٍ تحميل البيانات...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- قسم فواتير الشراء -->
+                <div id="purchaseInvoicesTab" class="tab-content" style="display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <input type="text" class="search-box" id="purchaseInvoiceSearch" placeholder="🔍 ابحث عن فاتورة شراء (بالرقم أو المورد)..." style="flex: 1; margin-left: 10px;">
+                        <div style="color: #667eea; font-weight: bold;">
+                            إجمالي الفواتير: <span id="purchaseInvoicesCount">0</span>
+                        </div>
+                    </div>
+                    <div style="background: white; border-radius: 10px; padding: 20px; max-height: 600px; overflow-y: auto; overflow-x: auto;">
+                        <table id="purchaseInvoicesTable" style="width: 100%; border-collapse: collapse; font-size: 0.9em; min-width: 1000px;">
+                            <thead>
+                                <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">#</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">رقم الفاتورة</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">تاريخ الفاتورة</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">رقم المورد</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">اسم المورد</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">إجمالي الفاتورة</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">المدفوع</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">المتبقي</th>
+                                </tr>
+                            </thead>
+                            <tbody id="purchaseInvoicesTableBody">
+                                <tr><td colspan="8" style="text-align: center; padding: 20px; color: #999;">جارٍ تحميل البيانات...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- قسم المخازن -->
+                <div id="storesTab" class="tab-content" style="display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <input type="text" class="search-box" id="storeSearch" placeholder="🔍 ابحث عن مخزن..." style="flex: 1; margin-left: 10px;">
+                        <div style="color: #667eea; font-weight: bold;">
+                            إجمالي المخازن: <span id="storesCount">0</span>
+                        </div>
+                    </div>
+                    <div style="background: white; border-radius: 10px; padding: 20px; max-height: 600px; overflow-y: auto; overflow-x: auto;">
+                        <table id="storesTable" style="width: 100%; border-collapse: collapse; font-size: 0.9em; min-width: 900px;">
+                            <thead>
+                                <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">#</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">رقم المخزن</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">اسم المخزن</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">العنوان</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">التليفون</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">الموبايل</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">نوع المخزن</th>
+                                </tr>
+                            </thead>
+                            <tbody id="storesTableBody">
+                                <tr><td colspan="7" style="text-align: center; padding: 20px; color: #999;">جارٍ تحميل البيانات...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- قسم مخزون حسب المخزن -->
+                <div id="stockByStoreTab" class="tab-content" style="display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px;">
+                        <input type="text" class="search-box" id="stockByStoreSearch" placeholder="🔍 ابحث (اسم مخزن / كود منتج / اسم منتج)..." style="flex: 1; min-width: 200px; margin-left: 10px;">
+                        <div style="color: #667eea; font-weight: bold; white-space: nowrap;">
+                            إجمالي السطور: <span id="stockByStoreCount">0</span> | 
+                            عرض: <span id="stockByStoreShowing">0</span>
+                        </div>
+                    </div>
+                    <div style="background: white; border-radius: 10px; padding: 20px; max-height: 550px; overflow-y: auto; overflow-x: auto;">
+                        <table id="stockByStoreTable" style="width: 100%; border-collapse: collapse; font-size: 0.9em; min-width: 1100px;">
+                            <thead>
+                                <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">#</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">رقم المخزن</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">اسم المخزن</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">رقم المنتج</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">كود المنتج</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">اسم المنتج</th>
+                                    <th style="padding: 12px; text-align: right; border: 1px solid #ddd; position: sticky; top: 0;">الكمية</th>
+                                </tr>
+                            </thead>
+                            <tbody id="stockByStoreTableBody">
+                                <tr><td colspan="7" style="text-align: center; padding: 20px; color: #999;">جارٍ تحميل البيانات...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="stockByStorePagination" style="display: flex; justify-content: center; align-items: center; gap: 10px; margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+                        <button id="stockByStorePrevBtn" onclick="changeStockByStorePage(-1)" style="padding: 8px 16px; background: #667eea; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">السابق</button>
+                        <span id="stockByStorePageInfo" style="color: #667eea; font-weight: bold;">صفحة 1 من 1</span>
+                        <button id="stockByStoreNextBtn" onclick="changeStockByStorePage(1)" style="padding: 8px 16px; background: #667eea; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">التالي</button>
+                        <select id="stockByStorePageSize" onchange="changeStockByStorePageSize()" style="padding: 8px; border: 1px solid #ddd; border-radius: 5px; margin-right: 10px;">
+                            <option value="100">100 لكل صفحة</option>
+                            <option value="200" selected>200 لكل صفحة</option>
+                            <option value="500">500 لكل صفحة</option>
+                            <option value="1000">1000 لكل صفحة</option>
+                        </select>
+                    </div>
+                    <div style="margin-top: 10px; color: #666; font-size: 0.9em;">
+                        * المعروض هو الرصيد الحالي لكل (منتج + مخزن) بناءً على تجميع حركات `tblInventory` (غير صفر فقط).
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>© 2026 AL RAMZY BROTHERS - Trading and Importing Automotive Spare Parts</p>
+            <p style="margin-top: 10px; opacity: 0.8;">نظام ERP متكامل | تم الاستعادة بنجاح</p>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div id="detailModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle"></h2>
+                <span class="close" onclick="closeModal()">&times;</span>
+            </div>
+            <div class="modal-body" id="modalBody">
+            </div>
+        </div>
+    </div>
+
+    <!-- تحميل بيانات قاعدة البيانات -->
+    <script src="database_data.js" onload="console.log('تم تحميل database_data.js')" onerror="console.error('خطأ في تحميل database_data.js')"></script>
+    
+    <script>
+        // المتغيرات productsData و clientsData و suppliersData يتم تعريفها في ملف database_data.js
+        // لا نحتاج لتعريفها هنا مرة أخرى
+
+        // بيانات المنتجات والعملاء - يتم تعريفها في ملف database_data.js
+        // لا نحتاج لتعريفها هنا - سنستخدم window.productsData و window.clientsData
+
+        // تحميل بيانات المنتجات من قاعدة البيانات
+        async function loadProductsData() {
+            try {
+                // التحقق من وجود البيانات في المتغيرات العامة (من ملف database_data.js)
+                const dataProducts = typeof productsData !== 'undefined' ? productsData : (window.productsDataFromDB || []);
+                if (dataProducts.length > 0) {
+                    window.productsData = dataProducts;
+                    displayProducts();
+                    return;
+                }
+                
+                // إذا لم تكن متوفرة، جلبها من الدالة
+                const data = await getProductsFromDB();
+                if (data && data.length > 0) {
+                    productsData = data;
+                    window.productsData = data;
+                    displayProducts();
+                } else {
+                    productsData = [];
+                    displayProducts();
+                }
+            } catch (error) {
+                console.error('Error loading products:', error);
+                productsData = [];
+                displayProducts();
+            }
+        }
+
+        // جلب المنتجات من قاعدة البيانات
+        async function getProductsFromDB() {
+            // البيانات يتم تحميلها من ملف database_data.js
+            // إذا لم تكن متوفرة، استخدم البيانات الافتراضية
+            if (window.productsDataFromDB && window.productsDataFromDB.length > 0) {
+                return window.productsDataFromDB;
+            }
+            
+            // بيانات تجريبية (فقط للعرض إذا لم تكن البيانات متوفرة)
+            return [
+                {code: 'CW10003', name: 'صاج مجلفن 14*20*1.5 سمك 19', quantity: 7500, unitName: 'قطعة', totalStock: 7500, reOrderLevel: 100, salesTax: 14, weight: 0}
+            ];
+        }
+
+        // تحميل بيانات العملاء من قاعدة البيانات
+        async function loadClientsData() {
+            try {
+                // التحقق من وجود البيانات في المتغيرات العامة (من ملف database_data.js)
+                const dataClients = typeof clientsData !== 'undefined' ? clientsData : (window.clientsDataFromDB || []);
+                if (dataClients.length > 0) {
+                    window.clientsData = dataClients;
+                    displayClients();
+                    return;
+                }
+                
+                // إذا لم تكن متوفرة، جلبها من الدالة
+                const data = await getClientsFromDB();
+                if (data && data.length > 0) {
+                    clientsData = data;
+                    window.clientsData = data;
+                    displayClients();
+                } else {
+                    clientsData = [];
+                    displayClients();
+                }
+            } catch (error) {
+                console.error('Error loading clients:', error);
+                clientsData = [];
+                displayClients();
+            }
+        }
+
+        // تحميل بيانات الموردين من قاعدة البيانات
+        async function loadSuppliersData() {
+            try {
+                // التحقق من وجود البيانات في المتغيرات العامة (من ملف database_data.js)
+                const dataSuppliers = typeof suppliersData !== 'undefined' ? suppliersData : (window.suppliersDataFromDB || []);
+                if (dataSuppliers.length > 0) {
+                    window.suppliersData = dataSuppliers;
+                    displaySuppliers();
+                    return;
+                }
+                
+                // إذا لم تكن متوفرة، جلبها من الدالة
+                const data = await getSuppliersFromDB();
+                if (data && data.length > 0) {
+                    suppliersData = data;
+                    window.suppliersData = data;
+                    displaySuppliers();
+                } else {
+                    suppliersData = [];
+                    displaySuppliers();
+                }
+            } catch (error) {
+                console.error('Error loading suppliers:', error);
+                suppliersData = [];
+                displaySuppliers();
+            }
+        }
+
+        // جلب العملاء من قاعدة البيانات
+        async function getClientsFromDB() {
+            // ملاحظة: لجلب البيانات الفعلية من قاعدة البيانات، تحتاج إلى:
+            // 1. إنشاء API endpoint
+            // 2. أو استخدام Web API من SQL Server
+            // 3. أو تضمين البيانات مباشرة هنا بعد جلبها
+            
+            // بيانات تجريبية (سيتم استبدالها ببيانات حقيقية)
+            // يمكنك نسخ البيانات من قاعدة البيانات ولصقها هنا
+            return [
+                {id: 1, name: 'عميل 1', salesman: 'مندوب 1', region: 'منطقة 1'},
+                {id: 2, name: 'عميل 2', salesman: 'مندوب 2', region: 'منطقة 2'},
+                {id: 3, name: 'عميل 3', salesman: 'مندوب 1', region: 'منطقة 2'}
+            ];
+        }
+
+        // جلب الموردين من قاعدة البيانات
+        async function getSuppliersFromDB() {
+            // ملاحظة: لجلب البيانات الفعلية من قاعدة البيانات، تحتاج إلى:
+            // 1. إنشاء API endpoint
+            // 2. أو استخدام Web API من SQL Server
+            // 3. أو تضمين البيانات مباشرة هنا بعد جلبها
+            
+            // بيانات تجريبية (سيتم استبدالها ببيانات حقيقية)
+            return [
+                {id: 1, name: 'مورد 1', salesman: 'مندوب 1', region: 'منطقة 1'},
+                {id: 2, name: 'مورد 2', salesman: 'مندوب 2', region: 'منطقة 2'}
+            ];
+        }
+
+        // تحميل بيانات فواتير البيع من قاعدة البيانات
+        async function loadSellingInvoicesData() {
+            try {
+                // التحقق من وجود البيانات في المتغيرات العامة (من ملف database_data.js)
+                const dataInvoices = typeof sellingInvoicesData !== 'undefined' ? sellingInvoicesData : (window.sellingInvoicesDataFromDB || []);
+                if (dataInvoices.length > 0) {
+                    window.sellingInvoicesData = dataInvoices;
+                    displaySellingInvoices();
+                    return;
+                }
+                
+                // إذا لم تكن متوفرة، جلبها من الدالة
+                const data = await getSellingInvoicesFromDB();
+                if (data && data.length > 0) {
+                    sellingInvoicesData = data;
+                    window.sellingInvoicesData = data;
+                    displaySellingInvoices();
+                } else {
+                    sellingInvoicesData = [];
+                    displaySellingInvoices();
+                }
+            } catch (error) {
+                console.error('Error loading selling invoices:', error);
+                sellingInvoicesData = [];
+                displaySellingInvoices();
+            }
+        }
+
+        // جلب فواتير البيع من قاعدة البيانات
+        async function getSellingInvoicesFromDB() {
+            // ملاحظة: لجلب البيانات الفعلية من قاعدة البيانات، تحتاج إلى:
+            // 1. إنشاء API endpoint
+            // 2. أو استخدام Web API من SQL Server
+            // 3. أو تضمين البيانات مباشرة هنا بعد جلبها
+            
+            // بيانات تجريبية (سيتم استبدالها ببيانات حقيقية)
+            return [
+                {id: 1, invoiceNo: 'INV-001', date: '2025-01-01', clientId: 1, clientName: 'عميل 1', total: 1000, paid: 500, remaining: 500}
+            ];
+        }
+
+        // عرض فواتير البيع
+        function displaySellingInvoices(filter = '') {
+            const tbody = document.getElementById('sellingInvoicesTableBody');
+            if (!tbody) {
+                console.error('لم يتم العثور على sellingInvoicesTableBody');
+                return;
+            }
+            
+            // استخدام البيانات من المتغيرات العامة
+            const dataToUse = (typeof sellingInvoicesData !== 'undefined' && sellingInvoicesData.length > 0) ? sellingInvoicesData : 
+                             (typeof window.sellingInvoicesData !== 'undefined' && window.sellingInvoicesData.length > 0 ? window.sellingInvoicesData : 
+                             (typeof window.sellingInvoicesDataFromDB !== 'undefined' && window.sellingInvoicesDataFromDB.length > 0 ? window.sellingInvoicesDataFromDB : []));
+            
+            console.log('بيانات فواتير البيع:', dataToUse.length);
+            
+            const filtered = dataToUse.filter(inv => 
+                (inv.invoiceNo && inv.invoiceNo.toString().toLowerCase().includes(filter.toLowerCase())) ||
+                (inv.clientName && inv.clientName.toLowerCase().includes(filter.toLowerCase())) ||
+                (inv.clientId && inv.clientId.toString().includes(filter))
+            );
+            
+            const countEl = document.getElementById('sellingInvoicesCount');
+            if (countEl) {
+                countEl.textContent = filtered.length.toLocaleString();
+            }
+            
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 20px; color: #999;">لا توجد نتائج</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = filtered.map((invoice, index) => {
+                const remaining = invoice.remaining !== undefined ? invoice.remaining : ((invoice.total || 0) - (invoice.paid || 0));
+                const isPaid = remaining <= 0;
+                const dateStr = invoice.date ? invoice.date.split(' ')[0] : '-';
+                
+                return `
+                <tr style="${isPaid ? 'background-color: #d4edda;' : ''}">
+                    <td>${(index + 1).toLocaleString()}</td>
+                    <td><strong>${invoice.invoiceNo || '-'}</strong></td>
+                    <td>${dateStr}</td>
+                    <td>${invoice.clientId || '-'}</td>
+                    <td>${invoice.clientName || '-'}</td>
+                    <td style="font-weight: bold; color: #667eea;">${(invoice.total || 0).toLocaleString()}</td>
+                    <td style="color: #28a745;">${(invoice.paid || 0).toLocaleString()}</td>
+                    <td style="font-weight: bold; color: ${isPaid ? '#28a745' : '#dc3545'};">${remaining.toLocaleString()}</td>
+                </tr>
+            `;
+            }).join('');
+        }
+
+        // تحميل بيانات فواتير الشراء من قاعدة البيانات
+        async function loadPurchaseInvoicesData() {
+            try {
+                const dataInvoices =
+                    typeof purchaseInvoicesData !== 'undefined'
+                        ? purchaseInvoicesData
+                        : (window.purchaseInvoicesDataFromDB || []);
+
+                if (dataInvoices.length > 0) {
+                    window.purchaseInvoicesData = dataInvoices;
+                    displayPurchaseInvoices();
+                    return;
+                }
+
+                const data = await getPurchaseInvoicesFromDB();
+                if (data && data.length > 0) {
+                    purchaseInvoicesData = data;
+                    window.purchaseInvoicesData = data;
+                    displayPurchaseInvoices();
+                } else {
+                    purchaseInvoicesData = [];
+                    displayPurchaseInvoices();
+                }
+            } catch (error) {
+                console.error('Error loading purchase invoices:', error);
+                purchaseInvoicesData = [];
+                displayPurchaseInvoices();
+            }
+        }
+
+        // جلب فواتير الشراء من قاعدة البيانات
+        async function getPurchaseInvoicesFromDB() {
+            // البيانات يتم تحميلها من ملف database_data.js
+            if (window.purchaseInvoicesDataFromDB && window.purchaseInvoicesDataFromDB.length > 0) {
+                return window.purchaseInvoicesDataFromDB;
+            }
+
+            // بيانات تجريبية (سيتم استبدالها ببيانات حقيقية)
+            return [
+                {id: 1, invoiceNo: 'PI-001', date: '2025-01-01', supplierId: 1, supplierName: 'مورد 1', total: 1000, paid: 500, remaining: 500}
+            ];
+        }
+
+        // عرض فواتير الشراء
+        function displayPurchaseInvoices(filter = '') {
+            const tbody = document.getElementById('purchaseInvoicesTableBody');
+            if (!tbody) {
+                console.error('لم يتم العثور على purchaseInvoicesTableBody');
+                return;
+            }
+
+            const dataToUse =
+                (typeof purchaseInvoicesData !== 'undefined' && purchaseInvoicesData.length > 0)
+                    ? purchaseInvoicesData
+                    : (
+                        (typeof window.purchaseInvoicesData !== 'undefined' && window.purchaseInvoicesData.length > 0)
+                            ? window.purchaseInvoicesData
+                            : (
+                                (typeof window.purchaseInvoicesDataFromDB !== 'undefined' && window.purchaseInvoicesDataFromDB.length > 0)
+                                    ? window.purchaseInvoicesDataFromDB
+                                    : []
+                            )
+                    );
+
+            const filtered = dataToUse.filter(inv =>
+                (inv.invoiceNo && inv.invoiceNo.toString().toLowerCase().includes(filter.toLowerCase())) ||
+                (inv.supplierName && inv.supplierName.toLowerCase().includes(filter.toLowerCase())) ||
+                (inv.supplierId && inv.supplierId.toString().includes(filter))
+            );
+
+            const countEl = document.getElementById('purchaseInvoicesCount');
+            if (countEl) {
+                countEl.textContent = filtered.length.toLocaleString();
+            }
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 20px; color: #999;">لا توجد نتائج</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = filtered.map((invoice, index) => {
+                const remaining = invoice.remaining !== undefined ? invoice.remaining : ((invoice.total || 0) - (invoice.paid || 0));
+                const isPaid = remaining <= 0;
+                const dateStr = invoice.date ? invoice.date.split(' ')[0] : '-';
+
+                return `
+                <tr style="${isPaid ? 'background-color: #d4edda;' : ''}">
+                    <td>${(index + 1).toLocaleString()}</td>
+                    <td><strong>${invoice.invoiceNo || '-'}</strong></td>
+                    <td>${dateStr}</td>
+                    <td>${invoice.supplierId || '-'}</td>
+                    <td>${invoice.supplierName || '-'}</td>
+                    <td style="font-weight: bold; color: #667eea;">${(invoice.total || 0).toLocaleString()}</td>
+                    <td style="color: #28a745;">${(invoice.paid || 0).toLocaleString()}</td>
+                    <td style="font-weight: bold; color: ${isPaid ? '#28a745' : '#dc3545'};">${remaining.toLocaleString()}</td>
+                </tr>
+            `;
+            }).join('');
+        }
+
+        // تحميل بيانات المخازن من قاعدة البيانات
+        async function loadStoresData() {
+            try {
+                const dataStores = (typeof storesData !== 'undefined') ? storesData : (window.storesDataFromDB || []);
+                if (dataStores.length > 0) {
+                    window.storesData = dataStores;
+                    displayStores();
+                    loadStoresForFilter(); // تحميل قائمة المخازن في dropdown
+                    return;
+                }
+
+                const data = await getStoresFromDB();
+                if (data && data.length > 0) {
+                    storesData = data;
+                    window.storesData = data;
+                    displayStores();
+                    loadStoresForFilter(); // تحميل قائمة المخازن في dropdown
+                } else {
+                    storesData = [];
+                    displayStores();
+                }
+            } catch (error) {
+                console.error('Error loading stores:', error);
+                storesData = [];
+                displayStores();
+            }
+        }
+
+        // جلب المخازن من قاعدة البيانات
+        async function getStoresFromDB() {
+            if (window.storesDataFromDB && window.storesDataFromDB.length > 0) {
+                return window.storesDataFromDB;
+            }
+            // بيانات تجريبية
+            return [{ id: 1, name: 'مخزن 1', address: '', phone: '', mobile: '', storeType: 0 }];
+        }
+
+        // عرض المخازن
+        function displayStores(filter = '') {
+            const tbody = document.getElementById('storesTableBody');
+            if (!tbody) {
+                console.error('لم يتم العثور على storesTableBody');
+                return;
+            }
+
+            const dataToUse =
+                (typeof storesData !== 'undefined' && storesData.length > 0)
+                    ? storesData
+                    : (
+                        (typeof window.storesData !== 'undefined' && window.storesData.length > 0)
+                            ? window.storesData
+                            : (
+                                (typeof window.storesDataFromDB !== 'undefined' && window.storesDataFromDB.length > 0)
+                                    ? window.storesDataFromDB
+                                    : []
+                            )
+                    );
+
+            const filtered = dataToUse.filter(s =>
+                (s.name && s.name.toLowerCase().includes(filter.toLowerCase())) ||
+                (s.address && s.address.toLowerCase().includes(filter.toLowerCase())) ||
+                (s.phone && s.phone.toString().includes(filter)) ||
+                (s.mobile && s.mobile.toString().includes(filter)) ||
+                (s.id && s.id.toString().includes(filter))
+            );
+
+            const countEl = document.getElementById('storesCount');
+            if (countEl) {
+                countEl.textContent = filtered.length.toLocaleString();
+            }
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 20px; color: #999;">لا توجد نتائج</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = filtered.map((store, index) => `
+                <tr>
+                    <td>${(index + 1).toLocaleString()}</td>
+                    <td>${store.id ?? '-'}</td>
+                    <td><strong>${store.name ?? '-'}</strong></td>
+                    <td>${store.address ?? ''}</td>
+                    <td>${store.phone ?? ''}</td>
+                    <td>${store.mobile ?? ''}</td>
+                    <td>${store.storeType ?? ''}</td>
+                </tr>
+            `).join('');
+        }
+
+        // تحميل مخزون حسب المخزن (منتج + مخزن + كمية)
+        async function loadStockByStoreData() {
+            try {
+                const data =
+                    (typeof stockByStoreData !== 'undefined')
+                        ? stockByStoreData
+                        : (window.stockByStoreDataFromDB || []);
+
+                if (data.length > 0) {
+                    window.stockByStoreData = data;
+                    displayStockByStore();
+                    // تحديث عرض المنتجات لإظهار المخازن
+                    if (typeof window.productsData !== 'undefined' && window.productsData.length > 0) {
+                        displayProducts();
+                    }
+                    return;
+                }
+
+                const fallback = await getStockByStoreFromDB();
+                stockByStoreData = fallback;
+                window.stockByStoreData = fallback;
+                displayStockByStore();
+                // تحديث عرض المنتجات لإظهار المخازن
+                if (typeof window.productsData !== 'undefined' && window.productsData.length > 0) {
+                    displayProducts();
+                }
+            } catch (error) {
+                console.error('Error loading stock by store:', error);
+                stockByStoreData = [];
+                window.stockByStoreData = [];
+                displayStockByStore();
+            }
+        }
+
+        async function getStockByStoreFromDB() {
+            if (window.stockByStoreDataFromDB && window.stockByStoreDataFromDB.length > 0) {
+                return window.stockByStoreDataFromDB;
+            }
+            return [];
+        }
+
+        // متغيرات Pagination لمخزون حسب المخزن
+        let stockByStoreCurrentPage = 1;
+        let stockByStorePageSize = 200;
+        let stockByStoreFilteredData = [];
+
+        function displayStockByStore(filter = '', page = null, pageSize = null) {
+            if (page !== null) stockByStoreCurrentPage = page;
+            if (pageSize !== null) stockByStorePageSize = parseInt(pageSize) || 200;
+            
+            const tbody = document.getElementById('stockByStoreTableBody');
+            if (!tbody) {
+                console.error('لم يتم العثور على stockByStoreTableBody');
+                return;
+            }
+
+            const dataToUse =
+                (typeof stockByStoreData !== 'undefined' && stockByStoreData.length > 0)
+                    ? stockByStoreData
+                    : (
+                        (typeof window.stockByStoreData !== 'undefined' && window.stockByStoreData.length > 0)
+                            ? window.stockByStoreData
+                            : (
+                                (typeof window.stockByStoreDataFromDB !== 'undefined' && window.stockByStoreDataFromDB.length > 0)
+                                    ? window.stockByStoreDataFromDB
+                                    : []
+                            )
+                    );
+
+            const q = filter.toLowerCase();
+            stockByStoreFilteredData = dataToUse.filter(r =>
+                (r.storeName && r.storeName.toLowerCase().includes(q)) ||
+                (r.productCode && r.productCode.toLowerCase().includes(q)) ||
+                (r.productName && r.productName.toLowerCase().includes(q)) ||
+                (r.storeId && r.storeId.toString().includes(filter)) ||
+                (r.productId && r.productId.toString().includes(filter))
+            );
+
+            // حساب Pagination
+            const totalItems = stockByStoreFilteredData.length;
+            const totalPages = Math.max(1, Math.ceil(totalItems / stockByStorePageSize));
+            stockByStoreCurrentPage = Math.min(stockByStoreCurrentPage, totalPages);
+            const startIndex = (stockByStoreCurrentPage - 1) * stockByStorePageSize;
+            const endIndex = Math.min(startIndex + stockByStorePageSize, totalItems);
+            const pageData = stockByStoreFilteredData.slice(startIndex, endIndex);
+
+            // تحديث العداد
+            const countEl = document.getElementById('stockByStoreCount');
+            const showingEl = document.getElementById('stockByStoreShowing');
+            if (countEl) countEl.textContent = totalItems.toLocaleString();
+            if (showingEl) showingEl.textContent = `${startIndex + 1}-${endIndex} من ${totalItems}`;
+
+            // تحديث Pagination UI
+            const pageInfo = document.getElementById('stockByStorePageInfo');
+            const prevBtn = document.getElementById('stockByStorePrevBtn');
+            const nextBtn = document.getElementById('stockByStoreNextBtn');
+            if (pageInfo) pageInfo.textContent = `صفحة ${stockByStoreCurrentPage} من ${totalPages}`;
+            if (prevBtn) prevBtn.disabled = stockByStoreCurrentPage <= 1;
+            if (nextBtn) nextBtn.disabled = stockByStoreCurrentPage >= totalPages;
+
+            if (pageData.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 20px; color: #999;">لا توجد نتائج</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = pageData.map((row, localIndex) => {
+                const globalIndex = startIndex + localIndex;
+                const qty = parseFloat(row.qty ?? 0);
+                const isNegative = qty < 0;
+                const qtyColor = isNegative ? '#dc3545' : '#667eea';
+                const qtyIcon = isNegative ? '⚠️ ' : '';
+                const qtyStyle = isNegative 
+                    ? `font-weight: bold; color: ${qtyColor}; background-color: #fff5f5; padding: 5px 10px; border-radius: 5px;` 
+                    : `font-weight: bold; color: ${qtyColor};`;
+                
+                return `
+                <tr>
+                    <td>${(globalIndex + 1).toLocaleString()}</td>
+                    <td>${row.storeId ?? '-'}</td>
+                    <td><strong>${row.storeName ?? '-'}</strong></td>
+                    <td>${row.productId ?? '-'}</td>
+                    <td>${row.productCode ?? '-'}</td>
+                    <td>${row.productName ?? '-'}</td>
+                    <td style="${qtyStyle}">${qtyIcon}${qty.toLocaleString()}</td>
+                </tr>
+            `;
+            }).join('');
+        }
+
+        // دوال Pagination لمخزون حسب المخزن
+        function changeStockByStorePage(delta) {
+            const totalPages = Math.max(1, Math.ceil(stockByStoreFilteredData.length / stockByStorePageSize));
+            const newPage = Math.max(1, Math.min(totalPages, stockByStoreCurrentPage + delta));
+            if (newPage !== stockByStoreCurrentPage) {
+                stockByStoreCurrentPage = newPage;
+                displayStockByStore(document.getElementById('stockByStoreSearch')?.value || '');
+            }
+        }
+
+        function changeStockByStorePageSize() {
+            const select = document.getElementById('stockByStorePageSize');
+            if (select) {
+                stockByStorePageSize = parseInt(select.value) || 200;
+                stockByStoreCurrentPage = 1;
+                displayStockByStore(document.getElementById('stockByStoreSearch')?.value || '');
+            }
+        }
+
+        // متغيرات Pagination للمنتجات
+        let productsCurrentPage = 1;
+        let productsPageSize = 100;
+        let productsFilteredData = [];
+        let productsStockDataCache = null;
+
+        // تحسين عرض المنتجات مع Pagination
+        function displayProducts(filter = '', page = null, pageSize = null) {
+            if (page !== null) productsCurrentPage = page;
+            if (pageSize !== null) productsPageSize = parseInt(pageSize) || 100;
+            
+            const tbody = document.getElementById('productsTableBody');
+            if (!tbody) return;
+            
+            // استخدام البيانات من المتغيرات العامة
+            const dataToUse = (typeof productsData !== 'undefined' && productsData.length > 0) ? productsData : 
+                             (typeof window.productsData !== 'undefined' && window.productsData.length > 0 ? window.productsData : 
+                             (typeof window.productsDataFromDB !== 'undefined' && window.productsDataFromDB.length > 0 ? window.productsDataFromDB : []));
+            
+            // جلب بيانات المخازن (cache مرة واحدة) - يجب أن يكون قبل التصفية
+            if (!productsStockDataCache) {
+                productsStockDataCache = (typeof window.stockByStoreData !== 'undefined' && window.stockByStoreData.length > 0) ? window.stockByStoreData :
+                                         (typeof window.stockByStoreDataFromDB !== 'undefined' && window.stockByStoreDataFromDB.length > 0 ? window.stockByStoreDataFromDB :
+                                         (typeof stockByStoreData !== 'undefined' && stockByStoreData.length > 0 ? stockByStoreData : []));
+            }
+            const stockData = productsStockDataCache;
+            
+            // تصفية البيانات - من البحث النصي
+            const filterLower = filter.toLowerCase();
+            let filtered = dataToUse.filter(p => 
+                (p.code && p.code.toLowerCase().includes(filterLower)) ||
+                (p.name && p.name.toLowerCase().includes(filterLower))
+            );
+            
+            // تطبيق فلتر المخزن
+            const selectedStore = document.getElementById('productStoreFilter')?.value || '';
+            if (selectedStore && stockData && stockData.length > 0) {
+                filtered = filtered.filter(p => {
+                    const productId = p.id || p.productId;
+                    const productCode = p.code;
+                    const productStores = stockData.filter(s => {
+                        const matchId = productId && s.productId && (Number(s.productId) === Number(productId));
+                        const matchCode = productCode && s.productCode && String(s.productCode).trim() === String(productCode).trim();
+                        return matchId || matchCode;
+                    });
+                    // التحقق من وجود المنتج في المخزن المحدد
+                    const hasStore = productStores.some(s => {
+                        const storeName = s.storeName || '';
+                        return storeName === selectedStore || storeName.trim() === selectedStore.trim();
+                    });
+                    return hasStore;
+                });
+            }
+            
+            productsFilteredData = filtered;
+            
+            // حساب Pagination
+            const totalItems = productsFilteredData.length;
+            const totalPages = Math.max(1, Math.ceil(totalItems / productsPageSize));
+            productsCurrentPage = Math.min(productsCurrentPage, totalPages);
+            const startIndex = (productsCurrentPage - 1) * productsPageSize;
+            const endIndex = Math.min(startIndex + productsPageSize, totalItems);
+            const pageData = productsFilteredData.slice(startIndex, endIndex);
+            
+            // تحديث العداد
+            document.getElementById('productsCount').textContent = totalItems.toLocaleString();
+            document.getElementById('productsShowing').textContent = `${startIndex + 1}-${endIndex} من ${totalItems}`;
+            
+            // تحديث Pagination UI
+            const pageInfo = document.getElementById('productsPageInfo');
+            const prevBtn = document.getElementById('productsPrevBtn');
+            const nextBtn = document.getElementById('productsNextBtn');
+            if (pageInfo) pageInfo.textContent = `صفحة ${productsCurrentPage} من ${totalPages}`;
+            if (prevBtn) prevBtn.disabled = productsCurrentPage <= 1;
+            if (nextBtn) nextBtn.disabled = productsCurrentPage >= totalPages;
+            
+            if (pageData.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 20px; color: #999;">لا توجد نتائج</td></tr>';
+                return;
+            }
+            
+            // بناء HTML للصفحة الحالية فقط
+            tbody.innerHTML = pageData.map((product, localIndex) => {
+                const globalIndex = startIndex + localIndex;
+                const inventoryQty = product.inventoryQuantity || product.quantity || 0;
+                const totalStock = product.totalStock || product.productStock || 0;
+                const reOrderLevel = product.reOrderLevel || 0;
+                const isLowStock = inventoryQty <= reOrderLevel && reOrderLevel > 0;
+                
+                // البحث عن المخازن (مبسط - أول 3 مخازن فقط للعرض السريع)
+                const productId = product.id || product.productId;
+                const productCode = product.code;
+                const productStores = stockData.filter(s => {
+                    const matchId = productId && s.productId && (Number(s.productId) === Number(productId));
+                    const matchCode = productCode && s.productCode && String(s.productCode).trim() === String(productCode).trim();
+                    return matchId || matchCode;
+                }).slice(0, 3); // أول 3 مخازن فقط
+                
+                // بناء قائمة المخازن (مبسطة)
+                let storesHtml = '';
+                if (productStores.length > 0) {
+                    storesHtml = productStores.map(store => {
+                        const qty = parseFloat(store.qty ?? 0);
+                        const isNegative = qty < 0;
+                        const qtyColor = isNegative ? '#dc3545' : '#28a745';
+                        return `<span style="display: inline-block; margin: 2px 4px; padding: 3px 6px; background: ${isNegative ? '#fff5f5' : '#f0f9ff'}; border-right: 2px solid ${qtyColor}; border-radius: 3px; font-size: 0.8em;">
+                            ${store.storeName || 'مخزن'}: <strong style="color: ${qtyColor};">${qty.toLocaleString()}</strong>
+                        </span>`;
+                    }).join('');
+                    // إذا كان هناك مخازن أكثر، أضف مؤشر
+                    const allStores = stockData.filter(s => {
+                        const matchId = productId && s.productId && (Number(s.productId) === Number(productId));
+                        const matchCode = productCode && s.productCode && String(s.productCode).trim() === String(productCode).trim();
+                        return matchId || matchCode;
+                    });
+                    if (allStores.length > 3) {
+                        storesHtml += `<span style="color: #667eea; font-size: 0.8em;"> +${allStores.length - 3} مخازن أخرى</span>`;
+                    }
+                } else {
+                    storesHtml = '<span style="color: #999; font-style: italic; font-size: 0.85em;">لا يوجد</span>';
+                }
+                
+                return `
+                <tr style="${isLowStock ? 'background-color: #fff3cd;' : ''}">
+                    <td>${(globalIndex + 1).toLocaleString()}</td>
+                    <td><strong>${product.code || '-'}</strong></td>
+                    <td>${product.name || '-'}</td>
+                    <td style="font-weight: bold; color: ${isLowStock ? '#dc3545' : '#667eea'};">${inventoryQty.toLocaleString()}</td>
+                    <td style="max-width: 300px; font-size: 0.85em; line-height: 1.6;">${storesHtml}</td>
+                    <td>${totalStock.toLocaleString()}</td>
+                    <td>${reOrderLevel.toLocaleString()}</td>
+                </tr>
+            `;
+            }).join('');
+        }
+
+        // دوال Pagination
+        function changeProductsPage(delta) {
+            const totalPages = Math.max(1, Math.ceil(productsFilteredData.length / productsPageSize));
+            const newPage = Math.max(1, Math.min(totalPages, productsCurrentPage + delta));
+            if (newPage !== productsCurrentPage) {
+                productsCurrentPage = newPage;
+                displayProducts(document.getElementById('productSearch')?.value || '');
+            }
+        }
+
+        function changeProductsPageSize() {
+            const select = document.getElementById('productsPageSize');
+            if (select) {
+                productsPageSize = parseInt(select.value) || 100;
+                productsCurrentPage = 1;
+                displayProducts(document.getElementById('productSearch')?.value || '');
+            }
+        }
+
+        // عرض العملاء
+        function displayClients(filter = '') {
+            const tbody = document.getElementById('clientsTableBody');
+            // استخدام البيانات من المتغيرات العامة
+            const dataToUse = (typeof clientsData !== 'undefined' && clientsData.length > 0) ? clientsData : 
+                             (typeof window.clientsData !== 'undefined' && window.clientsData.length > 0 ? window.clientsData : 
+                             (typeof window.clientsDataFromDB !== 'undefined' && window.clientsDataFromDB.length > 0 ? window.clientsDataFromDB : []));
+            const filtered = dataToUse.filter(c => 
+                (c.name && c.name.toLowerCase().includes(filter.toLowerCase())) ||
+                (c.id && c.id.toString().includes(filter))
+            );
+            
+            document.getElementById('clientsCount').textContent = filtered.length;
+            
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 20px; color: #999;">لا توجد نتائج</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = filtered.map((client, index) => `
+                <tr>
+                    <td>${index + 1}</td>
+                    <td>${client.id || '-'}</td>
+                    <td><strong>${client.name || '-'}</strong></td>
+                    <td>${client.salesman || '-'}</td>
+                    <td>${client.region || '-'}</td>
+                </tr>
+            `).join('');
+        }
+
+        // عرض الموردين
+        function displaySuppliers(filter = '') {
+            const tbody = document.getElementById('suppliersTableBody');
+            if (!tbody) {
+                console.error('لم يتم العثور على suppliersTableBody');
+                return;
+            }
+            
+            // استخدام البيانات من المتغيرات العامة
+            const dataToUse = (typeof suppliersData !== 'undefined' && suppliersData.length > 0) ? suppliersData : 
+                             (typeof window.suppliersData !== 'undefined' && window.suppliersData.length > 0 ? window.suppliersData : 
+                             (typeof window.suppliersDataFromDB !== 'undefined' && window.suppliersDataFromDB.length > 0 ? window.suppliersDataFromDB : []));
+            
+            console.log('بيانات الموردين:', dataToUse.length);
+            
+            const filtered = dataToUse.filter(s => 
+                (s.name && s.name.toLowerCase().includes(filter.toLowerCase())) ||
+                (s.id && s.id.toString().includes(filter))
+            );
+            
+            const countEl = document.getElementById('suppliersCount');
+            if (countEl) {
+                countEl.textContent = filtered.length;
+            }
+            
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 20px; color: #999;">لا توجد نتائج</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = filtered.map((supplier, index) => `
+                <tr>
+                    <td>${index + 1}</td>
+                    <td>${supplier.id || '-'}</td>
+                    <td><strong>${supplier.name || '-'}</strong></td>
+                    <td>${supplier.country || '-'}</td>
+                    <td>${supplier.email || '-'}</td>
+                </tr>
+            `).join('');
+        }
+
+        // التبديل بين التبويبات
+        function showTab(tab) {
+            console.log('تم الضغط على التبويب:', tab);
+            
+            // إخفاء جميع التبويبات
+            const productsTab = document.getElementById('productsTab');
+            const clientsTab = document.getElementById('clientsTab');
+            const suppliersTab = document.getElementById('suppliersTab');
+            const sellingInvoicesTab = document.getElementById('sellingInvoicesTab');
+            const purchaseInvoicesTab = document.getElementById('purchaseInvoicesTab');
+            const storesTab = document.getElementById('storesTab');
+            const stockByStoreTab = document.getElementById('stockByStoreTab');
+            
+            if (productsTab) productsTab.style.display = 'none';
+            if (clientsTab) clientsTab.style.display = 'none';
+            if (suppliersTab) suppliersTab.style.display = 'none';
+            if (sellingInvoicesTab) sellingInvoicesTab.style.display = 'none';
+            if (purchaseInvoicesTab) purchaseInvoicesTab.style.display = 'none';
+            if (storesTab) storesTab.style.display = 'none';
+            if (stockByStoreTab) stockByStoreTab.style.display = 'none';
+            
+            // إزالة active من جميع الأزرار
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+                btn.style.background = '#e9ecef';
+                btn.style.color = '#667eea';
+            });
+            
+            // إظهار التبويب المحدد
+            if (tab === 'products') {
+                if (productsTab) {
+                    productsTab.style.display = 'block';
+                    // تحميل البيانات إذا لم تكن محملة
+                    if (typeof window.productsData === 'undefined' || window.productsData.length === 0) {
+                        initializeData();
+                    }
+                }
+                const btn = document.querySelector('.tab-btn[onclick*="products"]');
+                if (btn) {
+                    btn.classList.add('active');
+                    btn.style.background = '#667eea';
+                    btn.style.color = 'white';
+                }
+            } else if (tab === 'clients') {
+                if (clientsTab) {
+                    clientsTab.style.display = 'block';
+                    // تحميل البيانات إذا لم تكن محملة
+                    if (typeof window.clientsData === 'undefined' || window.clientsData.length === 0) {
+                        initializeData();
+                    }
+                }
+                const btn = document.querySelector('.tab-btn[onclick*="clients"]');
+                if (btn) {
+                    btn.classList.add('active');
+                    btn.style.background = '#667eea';
+                    btn.style.color = 'white';
+                }
+            } else if (tab === 'suppliers') {
+                if (suppliersTab) {
+                    suppliersTab.style.display = 'block';
+                    // تحميل البيانات إذا لم تكن محملة
+                    if (typeof window.suppliersData === 'undefined' || window.suppliersData.length === 0) {
+                        loadSuppliersData();
+                    }
+                }
+                const btn = document.querySelector('.tab-btn[onclick*="suppliers"]');
+                if (btn) {
+                    btn.classList.add('active');
+                    btn.style.background = '#667eea';
+                    btn.style.color = 'white';
+                }
+            } else if (tab === 'sellingInvoices') {
+                if (sellingInvoicesTab) {
+                    sellingInvoicesTab.style.display = 'block';
+                    // تحميل البيانات إذا لم تكن محملة
+                    if (typeof window.sellingInvoicesData === 'undefined' || window.sellingInvoicesData.length === 0) {
+                        loadSellingInvoicesData();
+                    }
+                }
+                const btn = document.querySelector('.tab-btn[onclick*="sellingInvoices"]');
+                if (btn) {
+                    btn.classList.add('active');
+                    btn.style.background = '#667eea';
+                    btn.style.color = 'white';
+                }
+            } else if (tab === 'purchaseInvoices') {
+                if (purchaseInvoicesTab) {
+                    purchaseInvoicesTab.style.display = 'block';
+                    if (typeof window.purchaseInvoicesData === 'undefined' || window.purchaseInvoicesData.length === 0) {
+                        loadPurchaseInvoicesData();
+                    }
+                }
+                const btn = document.querySelector('.tab-btn[onclick*="purchaseInvoices"]');
+                if (btn) {
+                    btn.classList.add('active');
+                    btn.style.background = '#667eea';
+                    btn.style.color = 'white';
+                }
+            } else if (tab === 'stores') {
+                if (storesTab) {
+                    storesTab.style.display = 'block';
+                    if (typeof window.storesData === 'undefined' || window.storesData.length === 0) {
+                        loadStoresData();
+                    }
+                }
+                const btn = document.querySelector('.tab-btn[onclick*="stores"]');
+                if (btn) {
+                    btn.classList.add('active');
+                    btn.style.background = '#667eea';
+                    btn.style.color = 'white';
+                }
+            } else if (tab === 'stockByStore') {
+                if (stockByStoreTab) {
+                    stockByStoreTab.style.display = 'block';
+                    if (typeof window.stockByStoreData === 'undefined' || window.stockByStoreData.length === 0) {
+                        loadStockByStoreData();
+                    }
+                }
+                const btn = document.querySelector('.tab-btn[onclick*="stockByStore"]');
+                if (btn) {
+                    btn.classList.add('active');
+                    btn.style.background = '#667eea';
+                    btn.style.color = 'white';
+                }
+            }
+        }
+        
+        // جعل الدالة متاحة عالمياً
+        window.showTab = showTab;
+
+        // البحث في المنتجات
+        // Debounce function للبحث
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+
+        // دالة تطبيق فلتر المخزن
+        function applyStoreFilter() {
+            productsCurrentPage = 1; // إعادة تعيين الصفحة عند التصفية
+            const searchValue = document.getElementById('productSearch')?.value || '';
+            displayProducts(searchValue);
+        }
+        
+        // جعل الدالة متاحة عالمياً
+        window.applyStoreFilter = applyStoreFilter;
+
+        // دالة تحميل قائمة المخازن في dropdown
+        function loadStoresForFilter() {
+            const storeFilter = document.getElementById('productStoreFilter');
+            if (!storeFilter) return;
+            
+            // حذف جميع الخيارات عدا "جميع المخازن"
+            while (storeFilter.children.length > 1) {
+                storeFilter.removeChild(storeFilter.lastChild);
+            }
+            
+            // جلب بيانات المخازن
+            const storesData = (typeof window.storesData !== 'undefined' && window.storesData.length > 0) ? window.storesData :
+                             (typeof window.storesDataFromDB !== 'undefined' && window.storesDataFromDB.length > 0 ? window.storesDataFromDB :
+                             (typeof storesData !== 'undefined' && storesData.length > 0 ? storesData : []));
+            
+            // جمع أسماء المخازن الفريدة
+            const uniqueStoreNames = new Set();
+            storesData.forEach(store => {
+                const storeName = store.name || store.storeName;
+                if (storeName && !uniqueStoreNames.has(storeName)) {
+                    uniqueStoreNames.add(storeName);
+                }
+            });
+            
+            // إضافة المخازن الفريدة إلى dropdown
+            Array.from(uniqueStoreNames).sort().forEach(storeName => {
+                const option = document.createElement('option');
+                option.value = storeName;
+                option.textContent = storeName;
+                storeFilter.appendChild(option);
+            });
+        }
+
+        // البحث مع Debouncing (300ms)
+        const debouncedDisplayProducts = debounce((value) => {
+            productsCurrentPage = 1; // إعادة تعيين الصفحة عند البحث
+            displayProducts(value);
+        }, 300);
+
+        document.getElementById('productSearch').addEventListener('input', (e) => {
+            debouncedDisplayProducts(e.target.value);
+        });
+
+        // البحث في العملاء
+        // Debounced search functions
+        const debouncedDisplayClients = debounce((value) => { displayClients(value); }, 300);
+        const debouncedDisplaySuppliers = debounce((value) => { displaySuppliers(value); }, 300);
+        const debouncedDisplaySellingInvoices = debounce((value) => { displaySellingInvoices(value); }, 300);
+        const debouncedDisplayPurchaseInvoices = debounce((value) => { displayPurchaseInvoices(value); }, 300);
+        const debouncedDisplayStores = debounce((value) => { displayStores(value); }, 300);
+
+        document.getElementById('clientSearch').addEventListener('input', (e) => {
+            debouncedDisplayClients(e.target.value);
+        });
+
+        // البحث في الموردين
+        document.getElementById('supplierSearch').addEventListener('input', (e) => {
+            debouncedDisplaySuppliers(e.target.value);
+        });
+
+        // البحث في فواتير البيع
+        document.getElementById('sellingInvoiceSearch').addEventListener('input', (e) => {
+            debouncedDisplaySellingInvoices(e.target.value);
+        });
+
+        // البحث في فواتير الشراء
+        document.getElementById('purchaseInvoiceSearch').addEventListener('input', (e) => {
+            debouncedDisplayPurchaseInvoices(e.target.value);
+        });
+
+        // البحث في المخازن
+        document.getElementById('storeSearch').addEventListener('input', (e) => {
+            debouncedDisplayStores(e.target.value);
+        });
+
+        // البحث في مخزون حسب المخزن مع Debouncing
+        const debouncedDisplayStockByStore = debounce((value) => {
+            stockByStoreCurrentPage = 1; // إعادة تعيين الصفحة عند البحث
+            displayStockByStore(value);
+        }, 300);
+
+        document.getElementById('stockByStoreSearch').addEventListener('input', (e) => {
+            debouncedDisplayStockByStore(e.target.value);
+        });
+
+        // تحميل البيانات عند تحميل الصفحة
+        function initializeData() {
+            console.log('بدء تحميل البيانات...');
+            
+            // التحقق من وجود البيانات (من ملف database_data.js)
+            // ملف database_data.js يعرّف productsData و clientsData مباشرة
+            try {
+                if (typeof productsData !== 'undefined' && productsData.length > 0) {
+                    window.productsData = productsData;
+                    displayProducts();
+                    console.log('✓ تم تحميل ' + productsData.length + ' منتج');
+                } else if (typeof window.productsDataFromDB !== 'undefined' && window.productsDataFromDB.length > 0) {
+                    window.productsData = window.productsDataFromDB;
+                    displayProducts();
+                    console.log('✓ تم تحميل ' + window.productsDataFromDB.length + ' منتج من productsDataFromDB');
+                } else {
+                    console.log('جارٍ تحميل بيانات المنتجات...');
+                    loadProductsData();
+                }
+            } catch (error) {
+                console.error('خطأ في تحميل المنتجات:', error);
+                loadProductsData();
+            }
+            
+            try {
+                if (typeof clientsData !== 'undefined' && clientsData.length > 0) {
+                    window.clientsData = clientsData;
+                    displayClients();
+                    console.log('✓ تم تحميل ' + clientsData.length + ' عميل');
+                } else if (typeof window.clientsDataFromDB !== 'undefined' && window.clientsDataFromDB.length > 0) {
+                    window.clientsData = window.clientsDataFromDB;
+                    displayClients();
+                    console.log('✓ تم تحميل ' + window.clientsDataFromDB.length + ' عميل من clientsDataFromDB');
+                } else {
+                    console.log('جارٍ تحميل بيانات العملاء...');
+                    loadClientsData();
+                }
+            } catch (error) {
+                console.error('خطأ في تحميل العملاء:', error);
+                loadClientsData();
+            }
+            
+            try {
+                if (typeof suppliersData !== 'undefined' && suppliersData.length > 0) {
+                    window.suppliersData = suppliersData;
+                    displaySuppliers();
+                    console.log('✓ تم تحميل ' + suppliersData.length + ' مورد');
+                } else if (typeof window.suppliersDataFromDB !== 'undefined' && window.suppliersDataFromDB.length > 0) {
+                    window.suppliersData = window.suppliersDataFromDB;
+                    displaySuppliers();
+                    console.log('✓ تم تحميل ' + window.suppliersDataFromDB.length + ' مورد من suppliersDataFromDB');
+                } else {
+                    console.log('جارٍ تحميل بيانات الموردين...');
+                    loadSuppliersData();
+                }
+            } catch (error) {
+                console.error('خطأ في تحميل الموردين:', error);
+                loadSuppliersData();
+            }
+            
+            try {
+                if (typeof sellingInvoicesData !== 'undefined' && sellingInvoicesData.length > 0) {
+                    window.sellingInvoicesData = sellingInvoicesData;
+                    displaySellingInvoices();
+                    console.log('✓ تم تحميل ' + sellingInvoicesData.length + ' فاتورة بيع');
+                } else if (typeof window.sellingInvoicesDataFromDB !== 'undefined' && window.sellingInvoicesDataFromDB.length > 0) {
+                    window.sellingInvoicesData = window.sellingInvoicesDataFromDB;
+                    displaySellingInvoices();
+                    console.log('✓ تم تحميل ' + window.sellingInvoicesDataFromDB.length + ' فاتورة بيع من sellingInvoicesDataFromDB');
+                } else {
+                    console.log('جارٍ تحميل بيانات فواتير البيع...');
+                    loadSellingInvoicesData();
+                }
+            } catch (error) {
+                console.error('خطأ في تحميل فواتير البيع:', error);
+                loadSellingInvoicesData();
+            }
+
+            try {
+                if (typeof purchaseInvoicesData !== 'undefined' && purchaseInvoicesData.length > 0) {
+                    window.purchaseInvoicesData = purchaseInvoicesData;
+                    displayPurchaseInvoices();
+                    console.log('✓ تم تحميل ' + purchaseInvoicesData.length + ' فاتورة شراء');
+                } else if (typeof window.purchaseInvoicesDataFromDB !== 'undefined' && window.purchaseInvoicesDataFromDB.length > 0) {
+                    window.purchaseInvoicesData = window.purchaseInvoicesDataFromDB;
+                    displayPurchaseInvoices();
+                    console.log('✓ تم تحميل ' + window.purchaseInvoicesDataFromDB.length + ' فاتورة شراء من purchaseInvoicesDataFromDB');
+                } else {
+                    console.log('جارٍ تحميل بيانات فواتير الشراء...');
+                    loadPurchaseInvoicesData();
+                }
+            } catch (error) {
+                console.error('خطأ في تحميل فواتير الشراء:', error);
+                loadPurchaseInvoicesData();
+            }
+
+            try {
+                if (typeof storesData !== 'undefined' && storesData.length > 0) {
+                    window.storesData = storesData;
+                    displayStores();
+                    loadStoresForFilter(); // تحميل قائمة المخازن في dropdown
+                    console.log('✓ تم تحميل ' + storesData.length + ' مخزن');
+                } else if (typeof window.storesDataFromDB !== 'undefined' && window.storesDataFromDB.length > 0) {
+                    window.storesData = window.storesDataFromDB;
+                    displayStores();
+                    loadStoresForFilter(); // تحميل قائمة المخازن في dropdown
+                    console.log('✓ تم تحميل ' + window.storesDataFromDB.length + ' مخزن من storesDataFromDB');
+                } else {
+                    console.log('جارٍ تحميل بيانات المخازن...');
+                    loadStoresData().then(() => {
+                        loadStoresForFilter(); // تحميل قائمة المخازن بعد تحميل البيانات
+                    });
+                }
+            } catch (error) {
+                console.error('خطأ في تحميل المخازن:', error);
+                loadStoresData().then(() => {
+                    loadStoresForFilter(); // تحميل قائمة المخازن بعد تحميل البيانات
+                });
+            }
+
+            try {
+                if (typeof stockByStoreData !== 'undefined' && stockByStoreData.length > 0) {
+                    window.stockByStoreData = stockByStoreData;
+                    displayStockByStore();
+                    // تحديث عرض المنتجات لإظهار المخازن
+                    if (typeof window.productsData !== 'undefined' && window.productsData.length > 0) {
+                        displayProducts();
+                    }
+                    console.log('✓ تم تحميل ' + stockByStoreData.length + ' سطر مخزون حسب المخزن');
+                } else if (typeof window.stockByStoreDataFromDB !== 'undefined' && window.stockByStoreDataFromDB.length > 0) {
+                    window.stockByStoreData = window.stockByStoreDataFromDB;
+                    displayStockByStore();
+                    // تحديث عرض المنتجات لإظهار المخازن
+                    if (typeof window.productsData !== 'undefined' && window.productsData.length > 0) {
+                        displayProducts();
+                    }
+                    console.log('✓ تم تحميل ' + window.stockByStoreDataFromDB.length + ' سطر مخزون حسب المخزن من stockByStoreDataFromDB');
+                } else {
+                    console.log('جارٍ تحميل مخزون حسب المخزن...');
+                    loadStockByStoreData();
+                }
+            } catch (error) {
+                console.error('خطأ في تحميل مخزون حسب المخزن:', error);
+                loadStockByStoreData();
+            }
+        }
+        
+        window.addEventListener('DOMContentLoaded', () => {
+            console.log('تم تحميل الصفحة');
+            
+            // محاولة تحميل البيانات فوراً
+            initializeData();
+            
+            // إذا لم تكن متوفرة، انتظر قليلاً ثم حاول مرة أخرى
+            setTimeout(initializeData, 500);
+            setTimeout(initializeData, 1000);
+            setTimeout(initializeData, 2000);
+            setTimeout(initializeData, 3000);
+        });
+
+        // بيانات التفاصيل
+        const detailsData = {
+            tables: {
+                title: '📊 الجداول (230 جدول)',
+                content: `
+                    <div class="detail-item">
+                        <h3>نظرة عامة</h3>
+                        <p>قاعدة البيانات تحتوي على <strong>230 جدول</strong> منظمين في وحدات مختلفة تغطي جميع جوانب إدارة الأعمال.</p>
+                    </div>
+                    <div class="detail-item">
+                        <h3>أهم الجداول الرئيسية:</h3>
+                        <ul>
+                            <li>tblProducts - المنتجات (23,759 منتج)</li>
+                            <li>tblClients - العملاء (303 عميل)</li>
+                            <li>tblSuppliers - الموردين (264 مورد)</li>
+                            <li>tblSellingInvoice - فواتير البيع (11,588 فاتورة)</li>
+                            <li>tblPurchaseInvoice - فواتير الشراء (4,660 فاتورة)</li>
+                            <li>tblJournalEntry - قيود اليومية (21,866 قيد)</li>
+                            <li>tblStores - المخازن (8 مخازن)</li>
+                            <li>tblBank - البنوك</li>
+                            <li>tblCheques - الشيكات</li>
+                            <li>tblManufacturing - التصنيع</li>
+                        </ul>
+                    </div>
+                    <div class="detail-item">
+                        <h3>التصنيفات:</h3>
+                        <ul>
+                            <li>إدارة المنتجات والمخزون</li>
+                            <li>المبيعات والمشتريات</li>
+                            <li>المحاسبة المالية</li>
+                            <li>البنوك والخزينة</li>
+                            <li>التصنيع</li>
+                            <li>الصيانة والخدمات</li>
+                            <li>العقارات والاتصالات</li>
+                            <li>الأمان والصلاحيات</li>
+                        </ul>
+                    </div>
+                `
+            },
+            products: {
+                title: '📦 المنتجات (23,759 منتج)',
+                content: `
+                    <div class="detail-item">
+                        <h3>نظرة عامة</h3>
+                        <p>قاعدة البيانات تحتوي على <strong>23,759 منتج</strong> منظمين في 12 مستوى تصنيف مختلف.</p>
+                    </div>
+                    <div class="detail-item">
+                        <h3>الجداول المرتبطة:</h3>
+                        <ul>
+                            <li>tblProducts - جدول المنتجات الرئيسي</li>
+                            <li>tblProductsCategory1 إلى Category12 - 12 مستوى تصنيف</li>
+                            <li>tblProductsStores - توزيع المنتجات على المخازن</li>
+                            <li>tblProductsSerialNumbers - الأرقام التسلسلية</li>
+                            <li>tblInventory - المخزون</li>
+                            <li>tblProductsClientsNames - أسماء المنتجات للعملاء</li>
+                        </ul>
+                    </div>
+                    <div class="detail-item">
+                        <h3>المميزات:</h3>
+                        <ul>
+                            <li>إدارة متقدمة للمنتجات</li>
+                            <li>12 مستوى تصنيف هرمي</li>
+                            <li>تتبع الأرقام التسلسلية</li>
+                            <li>إدارة المخزون المتعددة</li>
+                            <li>ربط المنتجات بالعملاء والموردين</li>
+                        </ul>
+                    </div>
+                `
+            },
+            clients: {
+                title: '👥 العملاء (303 عميل)',
+                content: `
+                    <div class="detail-item">
+                        <h3>نظرة عامة</h3>
+                        <p>قاعدة البيانات تحتوي على <strong>303 عميل</strong> مع تفاصيل كاملة عن المعاملات والبيانات.</p>
+                    </div>
+                    <div class="detail-item">
+                        <h3>الجداول المرتبطة:</h3>
+                        <ul>
+                            <li>tblClients - جدول العملاء الرئيسي</li>
+                            <li>tblClientsCategory - تصنيفات العملاء</li>
+                            <li>tblClientsCategoryTree - شجرة تصنيفات العملاء</li>
+                            <li>tblClientsRetail - عملاء التجزئة</li>
+                            <li>tblClients_Products - منتجات العملاء</li>
+                            <li>tblSellingInvoice - فواتير البيع</li>
+                            <li>tblSalesOrder - طلبات البيع</li>
+                        </ul>
+                    </div>
+                    <div class="detail-item">
+                        <h3>المميزات:</h3>
+                        <ul>
+                            <li>إدارة شاملة للعملاء</li>
+                            <li>تصنيفات متعددة</li>
+                            <li>سجل المعاملات الكامل</li>
+                            <li>ربط مع المبيعات والفواتير</li>
+                            <li>إدارة حسابات العملاء</li>
+                        </ul>
+                    </div>
+                `
+            },
+            suppliers: {
+                title: '🏢 الموردين (264 مورد)',
+                content: `
+                    <div class="detail-item">
+                        <h3>نظرة عامة</h3>
+                        <p>قاعدة البيانات تحتوي على <strong>264 مورد</strong> مع تفاصيل كاملة عن المشتريات والمدفوعات.</p>
+                    </div>
+                    <div class="detail-item">
+                        <h3>الجداول المرتبطة:</h3>
+                        <ul>
+                            <li>tblSuppliers - جدول الموردين الرئيسي</li>
+                            <li>tblSuppliers_Products - منتجات الموردين</li>
+                            <li>tblPurchaseInvoice - فواتير الشراء</li>
+                            <li>tblPurchaseOrder - طلبات الشراء</li>
+                            <li>tblReturnPurchasePermission - إرجاع المشتريات</li>
+                        </ul>
+                    </div>
+                    <div class="detail-item">
+                        <h3>المميزات:</h3>
+                        <ul>
+                            <li>إدارة شاملة للموردين</li>
+                            <li>تتبع المشتريات</li>
+                            <li>إدارة الفواتير والمدفوعات</li>
+                            <li>ربط مع المنتجات</li>
+                            <li>سجل المعاملات الكامل</li>
+                        </ul>
+                    </div>
+                `
+            },
+            selling: {
+                title: '🧾 فواتير البيع (11,588 فاتورة)',
+                content: `
+                    <div class="detail-item">
+                        <h3>نظرة عامة</h3>
+                        <p>قاعدة البيانات تحتوي على <strong>11,588 فاتورة بيع</strong> مع تفاصيل كاملة عن المبيعات.</p>
+                    </div>
+                    <div class="detail-item">
+                        <h3>الجداول المرتبطة:</h3>
+                        <ul>
+                            <li>tblSellingInvoice - فواتير البيع الرئيسية</li>
+                            <li>tblSellingInvoicesDetails - تفاصيل فواتير البيع</li>
+                            <li>tblSellingInvoicesCollectingDetails - تفاصيل التحصيل</li>
+                            <li>tblSalesOrder - طلبات البيع</li>
+                            <li>tblSalesOffer - عروض الأسعار</li>
+                            <li>tblReturnSellPermission - إرجاع المبيعات</li>
+                            <li>tblSalesMan - مندوبي المبيعات</li>
+                        </ul>
+                    </div>
+                    <div class="detail-item">
+                        <h3>المميزات:</h3>
+                        <ul>
+                            <li>إدارة كاملة لفواتير البيع</li>
+                            <li>تفاصيل دقيقة لكل فاتورة</li>
+                            <li>تتبع التحصيلات</li>
+                            <li>إدارة العروض والطلبات</li>
+                            <li>ربط مع العملاء والمنتجات</li>
+                        </ul>
+                    </div>
+                `
+            },
+            purchase: {
+                title: '📋 فواتير الشراء (4,660 فاتورة)',
+                content: `
+                    <div class="detail-item">
+                        <h3>نظرة عامة</h3>
+                        <p>قاعدة البيانات تحتوي على <strong>4,660 فاتورة شراء</strong> مع تفاصيل كاملة عن المشتريات.</p>
+                    </div>
+                    <div class="detail-item">
+                        <h3>الجداول المرتبطة:</h3>
+                        <ul>
+                            <li>tblPurchaseInvoice - فواتير الشراء الرئيسية</li>
+                            <li>tblPurchaseInvoicesDetails - تفاصيل فواتير الشراء</li>
+                            <li>tblPurchaseInvoicesPayingDetails - تفاصيل الدفع</li>
+                            <li>tblPurchaseInvoiceExpenses - مصروفات الفواتير</li>
+                            <li>tblPurchaseOrder - طلبات الشراء</li>
+                            <li>tblReturnPurchasePermission - إرجاع المشتريات</li>
+                        </ul>
+                    </div>
+                    <div class="detail-item">
+                        <h3>المميزات:</h3>
+                        <ul>
+                            <li>إدارة كاملة لفواتير الشراء</li>
+                            <li>تفاصيل دقيقة لكل فاتورة</li>
+                            <li>تتبع المدفوعات</li>
+                            <li>إدارة طلبات الشراء</li>
+                            <li>ربط مع الموردين والمنتجات</li>
+                        </ul>
+                    </div>
+                `
+            },
+            journal: {
+                title: '📝 القيود المحاسبية (21,866 قيد)',
+                content: `
+                    <div class="detail-item">
+                        <h3>نظرة عامة</h3>
+                        <p>قاعدة البيانات تحتوي على <strong>21,866 قيد محاسبي</strong> مع تفاصيل كاملة عن المعاملات المالية.</p>
+                    </div>
+                    <div class="detail-item">
+                        <h3>الجداول المرتبطة:</h3>
+                        <ul>
+                            <li>tblJournalEntry - قيود اليومية الرئيسية</li>
+                            <li>tblJournalEntryDetails - تفاصيل القيود</li>
+                            <li>tblJE_Repeated - القيود المتكررة</li>
+                            <li>tblJE_Repeated_Details - تفاصيل القيود المتكررة</li>
+                            <li>tblAccTree - شجرة الحسابات</li>
+                            <li>tblTransaction - المعاملات</li>
+                            <li>tblPeriods - الفترات المالية</li>
+                        </ul>
+                    </div>
+                    <div class="detail-item">
+                        <h3>المميزات:</h3>
+                        <ul>
+                            <li>نظام محاسبي متكامل</li>
+                            <li>قيود يومية مفصلة</li>
+                            <li>شجرة حسابات هرمية</li>
+                            <li>قيود متكررة</li>
+                            <li>إقفال الفترات المالية</li>
+                        </ul>
+                    </div>
+                `
+            },
+            stores: {
+                title: '🏪 المخازن (8 مخازن)',
+                content: `
+                    <div class="detail-item">
+                        <h3>نظرة عامة</h3>
+                        <p>قاعدة البيانات تحتوي على <strong>8 مخازن</strong> مع إدارة كاملة للمخزون والتحويلات.</p>
+                    </div>
+                    <div class="detail-item">
+                        <h3>الجداول المرتبطة:</h3>
+                        <ul>
+                            <li>tblStores - جدول المخازن الرئيسي</li>
+                            <li>tblProductsStores - توزيع المنتجات على المخازن</li>
+                            <li>tblInventory - المخزون</li>
+                            <li>tblStockTransfer - تحويلات المخزون</li>
+                            <li>tblStockTransferDetails - تفاصيل التحويلات</li>
+                            <li>tblStockTaking - الجرد</li>
+                            <li>tblStockTakingDetails - تفاصيل الجرد</li>
+                            <li>tblBranchStore - مخازن الفروع</li>
+                        </ul>
+                    </div>
+                    <div class="detail-item">
+                        <h3>المميزات:</h3>
+                        <ul>
+                            <li>إدارة متعددة المخازن</li>
+                            <li>تتبع المخزون الدقيق</li>
+                            <li>تحويلات بين المخازن</li>
+                            <li>نظام الجرد</li>
+                            <li>ربط مع الفروع</li>
+                        </ul>
+                    </div>
+                `
+            }
+        };
+
+        // عرض التفاصيل
+        function showDetails(type) {
+            const modal = document.getElementById('detailModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalBody = document.getElementById('modalBody');
+            
+            if (detailsData[type]) {
+                modalTitle.innerHTML = detailsData[type].title;
+                modalBody.innerHTML = detailsData[type].content;
+                modal.style.display = 'block';
+            }
+        }
+
+        // إغلاق النافذة
+        function closeModal() {
+            document.getElementById('detailModal').style.display = 'none';
+        }
+
+        // إغلاق عند الضغط خارج النافذة
+        window.onclick = function(event) {
+            const modal = document.getElementById('detailModal');
+            if (event.target == modal) {
+                closeModal();
+            }
+        }
+    </script>
+</body>
+</html>

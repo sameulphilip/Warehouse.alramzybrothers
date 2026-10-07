@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.bak
+.env
+.env.*
+database_data.js
+warehouse-app/data/users.json
+warehouse-app/data/activity.json
+warehouse-app/check_api.py
