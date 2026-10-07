@@ -25,7 +25,7 @@ const sections = [
   { id: 'newPurchase', label: 'فاتورة شراء جديدة', title: 'فاتورة شراء جديدة', subtitle: 'تسجّل الفاتورة والمخزون والقيد مثل البرنامج الأصلي' },
   { id: 'purchases', label: 'فواتير الشراء', title: 'فواتير الشراء', subtitle: 'اضغط الفاتورة لعرض الأصناف' },
   { id: 'clients', label: 'العملاء', title: 'العملاء', subtitle: 'بيانات العملاء وأرقام التواصل' },
-  { id: 'suppliers', label: 'الموردين', title: 'الموردين', subtitle: 'بيانات الموردين وأرقام التواصل' },
+  { id: 'suppliers', label: 'الموردين', title: 'الموردين', subtitle: 'اضغط المورد لعرض كل فواتير الشراء' },
   { id: 'stores', label: 'المخازن', title: 'المخازن', subtitle: 'فروع ومخازن الشركة' },
   { id: 'activity', label: 'سجل الحركات', title: 'سجل الحركات', subtitle: 'كل حساب واللي عمله: فواتير، أسعار، وبحث' },
   { id: 'accounts', label: 'إدارة الحسابات', title: 'إدارة الحسابات', subtitle: 'حسابات الدخول وصلاحيات المديرين', admin: true }
@@ -146,6 +146,8 @@ async function openSection(id) {
           { label: 'الحساب', width: '0.8fr' }
         ],
         data.rows.map((row) => ({
+          clickable: id === 'suppliers',
+          attrs: id === 'suppliers' ? `data-id="${row.id}" data-name="${esc(row.name)}" data-acc="${esc(row.accCode)}"` : '',
           cells: [esc(row.name), esc(row.phone), esc(row.mobile), esc(row.address), esc(row.accCode)]
         }))
       ));
@@ -559,6 +561,63 @@ function renderSimple(kind, data, rows) {
   content.innerHTML = `${toolbar()}${rows}${pager(data.total)}`;
   bindSearch(() => openSection(kind));
   bindPager(data.total, () => openSection(kind));
+  if (kind === 'suppliers') {
+    content.querySelectorAll('.data-row.clickable').forEach((row) => {
+      row.onclick = () => openSupplierPurchases(row.dataset.id, row.dataset.name, row.dataset.acc);
+    });
+  }
+}
+
+async function openSupplierPurchases(id, name, acc, page = 1) {
+  drawer.classList.remove('hidden');
+  drawer.innerHTML = `<article class="sheet"><header><div><h2>فواتير الشراء</h2><p>${esc(name)}</p></div><button id="closeDrawer" class="ghost" type="button">إغلاق</button></header><div class="skeleton"><span></span><span></span><span></span></div></article>`;
+  document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
+  try {
+    const data = await api(`/api/suppliers/${id}/purchases?page=${page}&pageSize=20`);
+    const supplier = data.supplier || { name, accCode: acc };
+    const pages = Math.max(1, Math.ceil(data.total / 20));
+    const rows = grid(
+      [
+        { label: 'الرقم', width: '0.6fr' },
+        { label: 'التاريخ', width: '0.8fr' },
+        { label: 'المستخدم', width: '0.9fr' },
+        { label: 'الإجمالي', width: '0.8fr' },
+        { label: 'المدفوع', width: '0.7fr' },
+        { label: 'المتبقي', width: '0.7fr' }
+      ],
+      data.rows.map((row) => ({
+        clickable: true,
+        attrs: `data-id="${row.id}"`,
+        cells: [row.no, dateText(row.date), whoText(row.byName), money(row.amount), money(row.paid), money(row.due)]
+      }))
+    );
+    drawer.innerHTML = `<article class="sheet">
+      <header>
+        <div><h2>فواتير الشراء</h2><p>${esc(supplier.name)}${supplier.accCode ? ` · ${esc(supplier.accCode)}` : ''}</p></div>
+        <button id="closeDrawer" class="ghost" type="button">إغلاق</button>
+      </header>
+      <p class="meta"><span>${num(data.total)} فاتورة</span></p>
+      ${data.rows.length ? rows : '<div class="empty">لا توجد فواتير شراء لهذا المورد</div>'}
+      <div class="pager">
+        <button type="button" id="histPrev" ${page <= 1 ? 'disabled' : ''}>السابق</button>
+        <button type="button" id="histNext" ${page >= pages ? 'disabled' : ''}>التالي</button>
+      </div>
+    </article>`;
+    document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
+    document.getElementById('histPrev').onclick = () => { if (page > 1) openSupplierPurchases(id, supplier.name, supplier.accCode, page - 1); };
+    document.getElementById('histNext').onclick = () => { if (page < pages) openSupplierPurchases(id, supplier.name, supplier.accCode, page + 1); };
+    drawer.onclick = (event) => { if (event.target === drawer) drawer.classList.add('hidden'); };
+    drawer.querySelectorAll('.data-row.clickable').forEach((row) => {
+      row.onclick = async () => {
+        await openInvoice('purchases', row.dataset.id);
+        const close = document.getElementById('closeDrawer');
+        if (close) close.onclick = () => openSupplierPurchases(id, supplier.name, supplier.accCode, page);
+      };
+    });
+  } catch (error) {
+    drawer.innerHTML = `<article class="sheet"><header><h2>فواتير الشراء</h2><button id="closeDrawer" class="ghost" type="button">إغلاق</button></header><div class="error">${esc(error.message)}</div></article>`;
+    document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
+  }
 }
 
 function renderInvoices(kind, data, party) {

@@ -837,6 +837,46 @@ app.get('/api/suppliers', requireAuth, async (req, res) => {
   }
 });
 
+app.get('/api/suppliers/:id/purchases', requireAuth, async (req, res) => {
+  try {
+    const supplierId = Number(req.params.id);
+    if (!Number.isFinite(supplierId) || supplierId < 0) return res.status(400).json({ error: 'المورد غير موجود' });
+    const { page, pageSize, start, end } = paging(req);
+    const pool = await poolPromise;
+    const supplier = await pool.request().input('id', sql.Numeric(18, 0), supplierId).query(`
+      SELECT SupplierID AS id, ISNULL(SupplierName, N'') AS name, ISNULL(AccCode, N'') AS accCode
+      FROM tblSuppliers WHERE SupplierID = @id
+    `);
+    if (!supplier.recordset[0]) return res.status(404).json({ error: 'المورد غير موجود' });
+    const data = await queryPage(`
+      WITH numbered AS (
+        SELECT
+          pi.PurchaseInvoiceID AS id,
+          pi.PurchaseInvoiceNo AS no,
+          pi.PurchaseInvoiceDate AS date,
+          ISNULL(pi.PurchaseInvoiceTotalAmount, 0) AS amount,
+          ISNULL(pi.TotalPaiedAmount, 0) AS paid,
+          ISNULL(pi.NotPaiedAmount, 0) AS due,
+          ISNULL(pi.InsertedBy, N'') AS byName,
+          ROW_NUMBER() OVER (ORDER BY pi.PurchaseInvoiceDate DESC, pi.PurchaseInvoiceID DESC) AS rn,
+          COUNT(*) OVER () AS total
+        FROM tblPurchaseInvoice pi
+        WHERE pi.SupplierID = @supplierId
+      )
+      SELECT id, no, date, amount, paid, due, byName, total
+      FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn
+    `, [
+      { name: 'supplierId', type: sql.Numeric(18, 0), value: supplierId },
+      { name: 'start', type: sql.Int, value: start },
+      { name: 'end', type: sql.Int, value: end }
+    ]);
+    res.json({ page, pageSize, total: data.total, supplier: supplier.recordset[0], rows: data.rows });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'تعذر تحميل فواتير المورد' });
+  }
+});
+
 app.get('/api/sales', requireAuth, async (req, res) => {
   try {
     const { page, pageSize, start, end } = paging(req);
@@ -1082,6 +1122,17 @@ async function txQuery(tx, text, inputs = []) {
   return request.query(text);
 }
 
+function businessDay() {
+  const cairo = new Date(Date.now() + 3 * 60 * 60 * 1000);
+  const month = String(cairo.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(cairo.getUTCDate()).padStart(2, '0');
+  return `${cairo.getUTCFullYear()}-${month}-${day}`;
+}
+
+function invoiceTypeId(partyId) {
+  return Number(partyId) ? 2 : 1;
+}
+
 function clip(value, max) {
   const text = String(value || '');
   return text.length > max ? text.slice(0, max) : text;
@@ -1202,18 +1253,19 @@ app.post('/api/sales', requireAuth, async (req, res) => {
          TotalOnCollectDiscount, Notes, Posted, JournalEntryID, PeriodID, BranchId,
          SellingInvoiceTypeId, SalesRepId, InsertedDate, InsertedBy)
       VALUES
-        (@no, @clientId, @date, @total, 0, 0, 0, 0, 0, @total,
+        (@no, @clientId, CAST(@date AS datetime), @total, 0, 0, 0, 0, 0, @total,
          0, 0, 0, 0, 0, 0, @total, 0, 1, @collected, 0, 0, @notes, 1, @journalId, 1, 0,
-         1, 0, GETDATE(), @actor);
+         @typeId, 0, GETDATE(), @actor);
       SELECT SCOPE_IDENTITY() AS id;
     `, [
       { name: 'no', type: sql.Numeric(18, 0), value: invoiceNo },
       { name: 'clientId', type: sql.Numeric(18, 0), value: client.ClientId || 0 },
-      { name: 'date', type: sql.DateTime, value: new Date() },
+      { name: 'date', type: sql.NVarChar(10), value: businessDay() },
       { name: 'total', type: sql.Numeric(18, 4), value: invoiceTotal },
       { name: 'collected', type: sql.Numeric(18, 4), value: collected },
       { name: 'notes', type: sql.NVarChar(250), value: notes },
-      { name: 'journalId', type: sql.Numeric(18, 0), value: journalId }
+      { name: 'journalId', type: sql.Numeric(18, 0), value: journalId },
+      { name: 'typeId', type: sql.Int, value: invoiceTypeId(client.ClientId) }
     ]);
     const invoiceId = invoice.recordset[0].id;
 
@@ -1460,19 +1512,20 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
          ReturnedAmount, TotalOnPaiedDiscount, Notes, PurchaseRepId, Posted, JournalEntryID, PeriodID, BranchId,
          PurchaseInvoiceTypeId, InsertedDate, InsertedBy)
       VALUES
-        (@no, @ref, 0, 0, @supplierId, @date, @total, 0, 0, 0, 0, 0,
+        (@no, @ref, 0, 0, @supplierId, CAST(@date AS datetime), @total, 0, 0, 0, 0, 0,
          @total, 0, 0, 0, 0, 0, 0, 0, @total, 0, 1, @collected,
-         0, 0, @notes, 0, 1, @journalId, 1, 0, 1, GETDATE(), @actor);
+         0, 0, @notes, 0, 1, @journalId, 1, 0, @typeId, GETDATE(), @actor);
       SELECT SCOPE_IDENTITY() AS id;
     `, [
       { name: 'no', type: sql.Numeric(18, 0), value: invoiceNo },
       { name: 'ref', type: sql.NVarChar(50), value: String(invoiceNo) },
       { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
-      { name: 'date', type: sql.DateTime, value: new Date() },
+      { name: 'date', type: sql.NVarChar(10), value: businessDay() },
       { name: 'total', type: sql.Numeric(18, 4), value: invoiceTotal },
       { name: 'collected', type: sql.Numeric(18, 4), value: collected },
       { name: 'notes', type: sql.NVarChar(250), value: notes },
-      { name: 'journalId', type: sql.Numeric(18, 0), value: journalId }
+      { name: 'journalId', type: sql.Numeric(18, 0), value: journalId },
+      { name: 'typeId', type: sql.Int, value: invoiceTypeId(supplier.SupplierID) }
     ]);
     const invoiceId = invoice.recordset[0].id;
 
@@ -2010,11 +2063,12 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
       }
     }
     await txQuery(tx, `
-      UPDATE tblSellingInvoice SET ClientID = @clientId, TotalProductsPrice = @total, TaxbaseAmount = @total,
+      UPDATE tblSellingInvoice SET ClientID = @clientId, SellingInvoiceTypeId = @typeId, TotalProductsPrice = @total, TaxbaseAmount = @total,
         SellingInvoiceTotalAmount = @total, TotalCollectedAmount = @paid
       WHERE SellingInvoiceID = @id
     `, [
       { name: 'clientId', type: sql.Numeric(18, 0), value: client.ClientId || 0 },
+      { name: 'typeId', type: sql.Int, value: invoiceTypeId(client.ClientId) },
       { name: 'total', type: sql.Numeric(18, 4), value: parsed.total },
       { name: 'paid', type: sql.Numeric(18, 4), value: paid },
       { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
@@ -2271,11 +2325,12 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
       }
     }
     await txQuery(tx, `
-      UPDATE tblPurchaseInvoice SET SupplierID = @supplierId, TotalProductsPrice = @total, TaxbaseAmount = @total,
+      UPDATE tblPurchaseInvoice SET SupplierID = @supplierId, PurchaseInvoiceTypeId = @typeId, TotalProductsPrice = @total, TaxbaseAmount = @total,
         PurchaseInvoiceTotalAmount = @total, TotalPaiedAmount = @paid
       WHERE PurchaseInvoiceID = @id
     `, [
       { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
+      { name: 'typeId', type: sql.Int, value: invoiceTypeId(supplier.SupplierID) },
       { name: 'total', type: sql.Numeric(18, 4), value: parsed.total },
       { name: 'paid', type: sql.Numeric(18, 4), value: paid },
       { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
