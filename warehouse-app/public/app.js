@@ -767,7 +767,7 @@ function renderNewSale() {
       </div>
       <div id="productResults"></div>
       ${inlineProductHtml('saleNew')}
-      <div class="data line-grid" style="--cols:${editing ? '1.5fr .9fr .6fr .6fr .7fr auto' : '2fr .7fr .8fr .9fr auto'}">
+      <div class="data line-grid${editing ? ' line-grid-edit' : ''}">
         <div class="data-head"><span>الصنف</span>${editing ? '<span>المخزن</span>' : ''}<span>الكمية</span><span>السعر</span><span>الإجمالي</span><span></span></div>
         <div id="draftLines"></div>
       </div>
@@ -922,7 +922,7 @@ function renderNewPurchase() {
       </div>
       <div id="productResults"></div>
       ${inlineProductHtml('buyNew')}
-      <div class="data line-grid" style="--cols:${editing ? '1.5fr .9fr .6fr .6fr .7fr auto' : '2fr .7fr .8fr .9fr auto'}">
+      <div class="data line-grid${editing ? ' line-grid-edit' : ''}">
         <div class="data-head"><span>الصنف</span>${editing ? '<span>المخزن</span>' : ''}<span>الكمية</span><span>السعر</span><span>الإجمالي</span><span></span></div>
         <div id="draftLines"></div>
       </div>
