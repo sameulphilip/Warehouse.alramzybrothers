@@ -5,26 +5,108 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
+function loadEnv(file) {
+  try {
+    const text = fs.readFileSync(file, 'utf8');
+    for (const line of text.split(/\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq < 1) continue;
+      const key = trimmed.slice(0, eq).trim();
+      let value = trimmed.slice(eq + 1).trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+      if (!process.env[key]) process.env[key] = value;
+    }
+  } catch (error) { /* the process already has its own settings */ }
+}
+
+loadEnv(path.join(__dirname, '.env'));
+
 const PORT = Number(process.env.PORT || 3015);
 const APP_USER = process.env.APP_USER || 'manager';
 const APP_PASSWORD = process.env.APP_PASSWORD || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-this-session-secret';
 
-const poolPromise = sql.connect({
-  server: process.env.SQL_HOST,
-  port: Number(process.env.SQL_PORT || 1433),
-  user: process.env.SQL_USER,
-  password: process.env.SQL_PASSWORD,
-  database: process.env.SQL_DATABASE || 'RamixDB',
-  connectionTimeout: 20000,
-  requestTimeout: 45000,
-  pool: { max: 10, min: 1, idleTimeoutMillis: 30000 },
-  options: {
-    encrypt: false,
-    trustServerCertificate: true,
-    enableArithAbort: true
+const targetFile = path.join(__dirname, 'data', 'db-target.json');
+
+function readMeta() {
+  try {
+    const data = JSON.parse(fs.readFileSync(targetFile, 'utf8'));
+    return data && typeof data === 'object' ? data : {};
+  } catch (error) {
+    return {};
   }
-});
+}
+
+function writeMeta(patch) {
+  const next = { target: 'primary', ...readMeta(), ...patch };
+  if (next.target !== 'standby') next.target = 'primary';
+  fs.mkdirSync(path.dirname(targetFile), { recursive: true });
+  const temp = `${targetFile}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(next, null, 2));
+  fs.renameSync(temp, targetFile);
+  return next;
+}
+
+function readTarget() {
+  return readMeta().target === 'standby' ? 'standby' : 'primary';
+}
+
+function sqlConfig(target) {
+  const standby = target === 'standby';
+  return {
+    server: standby ? (process.env.SQL_STANDBY_HOST || '127.0.0.1') : process.env.SQL_HOST,
+    port: Number(standby ? (process.env.SQL_STANDBY_PORT || 14330) : (process.env.SQL_PORT || 1433)),
+    user: standby ? (process.env.SQL_STANDBY_USER || 'sa') : process.env.SQL_USER,
+    password: standby ? process.env.SQL_STANDBY_PASSWORD : process.env.SQL_PASSWORD,
+    database: process.env.SQL_DATABASE || 'RamixDB',
+    connectionTimeout: standby ? 8000 : 20000,
+    requestTimeout: 45000,
+    pool: { max: standby ? 8 : 10, min: 0, idleTimeoutMillis: 30000 },
+    options: {
+      encrypt: standby,
+      trustServerCertificate: true,
+      enableArithAbort: true
+    }
+  };
+}
+
+function connectSaved() {
+  return new sql.ConnectionPool(sqlConfig(readTarget())).connect();
+}
+
+let poolPromise = connectSaved();
+poolPromise.catch((error) => console.error('database', error.message));
+
+async function pingDatabase(target) {
+  const standby = target === 'standby';
+  const pool = new sql.ConnectionPool({
+    ...sqlConfig(target),
+    connectionTimeout: standby ? 8000 : 4000,
+    requestTimeout: standby ? 8000 : 6000,
+    pool: { max: 1, min: 0, idleTimeoutMillis: 1000 }
+  });
+  try {
+    await pool.connect();
+    const result = await pool.request().query('SELECT DB_NAME() AS name');
+    return result.recordset[0] && result.recordset[0].name === (process.env.SQL_DATABASE || 'RamixDB');
+  } catch (error) {
+    return false;
+  } finally {
+    try { await pool.close(); } catch (closeError) { /* ignore */ }
+  }
+}
+
+async function switchDatabase(target) {
+  const pool = new sql.ConnectionPool(sqlConfig(target));
+  await pool.connect();
+  const previous = poolPromise;
+  poolPromise = Promise.resolve(pool);
+  writeMeta({ target });
+  previous.then((old) => old.close()).catch(() => {});
+  return pool;
+}
 
 const app = express();
 app.set('trust proxy', 1);
@@ -259,6 +341,39 @@ app.put('/api/users/:id', requireSuper, (req, res) => {
   res.json({ ok: true, user: publicUser(next) });
 });
 
+app.get('/api/database', requireSuper, async (req, res) => {
+  const meta = readMeta();
+  const [primaryUp, standbyUp] = await Promise.all([pingDatabase('primary'), pingDatabase('standby')]);
+  res.json({
+    target: readTarget(),
+    primaryUp,
+    standbyUp,
+    lastCopyAt: meta.lastCopyAt || null,
+    lastCopyError: meta.lastCopyError || ''
+  });
+});
+
+app.post('/api/database/switch', requireSuper, async (req, res) => {
+  try {
+    const want = req.body && req.body.target === 'standby' ? 'standby' : 'primary';
+    if (want === readTarget()) return res.json({ ok: true, target: want });
+    if (want === 'standby') {
+      if (await pingDatabase('primary')) return res.status(400).json({ error: 'القاعدة الأساسية لسه متصلة' });
+      if (!(await pingDatabase('standby'))) return res.status(400).json({ error: 'النسخة الخارجية غير جاهزة' });
+    } else if (!(await pingDatabase('primary'))) {
+      return res.status(400).json({ error: 'القاعدة الأساسية لسه واقفة' });
+    }
+    await switchDatabase(want);
+    memoryCache.clear();
+    const label = want === 'standby' ? 'النسخة الخارجية' : 'القاعدة الأساسية';
+    recordActivity(req, { action: 'database', detail: `تحويل قاعدة الموقع إلى ${label}`, ref: `database:${want}` });
+    res.json({ ok: true, target: want });
+  } catch (error) {
+    console.error(error);
+    res.status(400).json({ error: 'تعذر التحويل لقاعدة البيانات' });
+  }
+});
+
 app.post('/api/logout', (req, res) => {
   recordActivity(req, { action: 'logout', detail: 'خروج من النظام' }).finally(() => {
     req.session.destroy(() => res.json({ ok: true }));
@@ -279,21 +394,124 @@ app.get('/api/activity', requireAuth, (req, res) => {
   res.json({ page, pageSize, total: rows.length, rows: rows.slice(start - 1, end) });
 });
 
+function dashboardRange(value) {
+  const ranges = { '1': 0, '3': 2, '6': 5, '12': 11 };
+  const range = Object.prototype.hasOwnProperty.call(ranges, String(value)) ? String(value) : '1';
+  return { range, back: ranges[range], monthly: range !== '1' };
+}
+
+function fillBuckets(rows, startKey, todayKey, monthly) {
+  const totals = new Map(rows.map((row) => [String(row.bucket).trim(), Number(row.total)]));
+  const buckets = [];
+  const cursor = new Date(`${monthly ? `${startKey.slice(0, 7)}-01` : startKey}T12:00:00Z`);
+  const end = new Date(`${monthly ? `${todayKey.slice(0, 7)}-01` : todayKey}T12:00:00Z`);
+  while (cursor <= end) {
+    const key = monthly ? cursor.toISOString().slice(0, 7) : cursor.toISOString().slice(0, 10);
+    buckets.push({ day: key, total: totals.get(key) || 0 });
+    if (monthly) cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+    else cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return buckets;
+}
+
 app.get('/api/dashboard', requireAuth, async (req, res) => {
   try {
-    const payload = await cached('dashboard', 20000, async () => {
+    const choice = dashboardRange(req.query.range);
+    const payload = await cached(`dashboard:${choice.range}`, 60000, async () => {
     const pool = await poolPromise;
-    const counts = await pool.request().query(`
+    const periodSql = `
+      DECLARE @today datetime, @monthStart datetime, @start datetime, @end datetime
+      SET @today = DATEADD(day, DATEDIFF(day, 0, GETDATE()), 0)
+      SET @monthStart = DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+      SET @start = DATEADD(month, -@back, @monthStart)
+      SET @end = DATEADD(day, 1, @today)
+    `;
+    const summaryRequest = pool.request();
+    summaryRequest.input('back', sql.Int, choice.back);
+    const summary = await summaryRequest.query(`
+      ${periodSql}
       SELECT
-        (SELECT COUNT(*) FROM tblProducts) AS products,
-        (SELECT COUNT(*) FROM tblClients) AS clients,
-        (SELECT COUNT(*) FROM tblSuppliers) AS suppliers,
-        (SELECT COUNT(*) FROM tblSellingInvoice) AS sales,
-        (SELECT COUNT(*) FROM tblPurchaseInvoice) AS purchases,
-        (SELECT COUNT(*) FROM tblStores) AS stores,
-        (SELECT COUNT(*) FROM tblJournalEntry) AS journals,
+        CONVERT(char(10), @today, 120) AS todayKey,
+        CONVERT(char(10), @start, 120) AS periodStart,
+        (SELECT ISNULL(SUM(SellingInvoiceTotalAmount), 0) FROM tblSellingInvoice WHERE SellingInvoiceDate >= @start AND SellingInvoiceDate < @end) AS sales,
+        (SELECT COUNT(*) FROM tblSellingInvoice WHERE SellingInvoiceDate >= @start AND SellingInvoiceDate < @end) AS saleCount,
+        (SELECT ISNULL(SUM(PurchaseInvoiceTotalAmount), 0) FROM tblPurchaseInvoice WHERE PurchaseInvoiceDate >= @start AND PurchaseInvoiceDate < @end) AS purchases,
+        (SELECT COUNT(*) FROM tblPurchaseInvoice WHERE PurchaseInvoiceDate >= @start AND PurchaseInvoiceDate < @end) AS purchaseCount,
         (SELECT ISNULL(SUM(NotCollectedAmount), 0) FROM tblSellingInvoice) AS salesDue,
         (SELECT ISNULL(SUM(NotPaiedAmount), 0) FROM tblPurchaseInvoice) AS purchaseDue
+    `);
+    const trendRequest = pool.request();
+    trendRequest.input('back', sql.Int, choice.back);
+    const bucket = choice.monthly ? 'char(7)' : 'char(10)';
+    const trend = await trendRequest.query(`
+      ${periodSql}
+      SELECT CONVERT(${bucket}, SellingInvoiceDate, 120) AS bucket,
+             ISNULL(SUM(SellingInvoiceTotalAmount), 0) AS total
+      FROM tblSellingInvoice
+      WHERE SellingInvoiceDate >= @start AND SellingInvoiceDate < @end
+      GROUP BY CONVERT(${bucket}, SellingInvoiceDate, 120)
+    `);
+    const topRequest = pool.request();
+    topRequest.input('back', sql.Int, choice.back);
+    const top = await topRequest.query(`
+      ${periodSql}
+      SELECT TOP 5
+        p.ProductId AS id,
+        ISNULL(p.ProductName, N'') AS name,
+        ISNULL(p.ProductCode, '') AS code,
+        SUM(ISNULL(d.OutQuantity, 0)) AS qty,
+        SUM(ISNULL(d.TotalPrice, 0)) AS total
+      FROM tblSellingInvoicesDetails d
+      INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
+      INNER JOIN tblProducts p ON p.ProductId = d.ProductID
+      WHERE si.SellingInvoiceDate >= @start AND si.SellingInvoiceDate < @end
+      GROUP BY p.ProductId, p.ProductName, p.ProductCode
+      ORDER BY SUM(ISNULL(d.TotalPrice, 0)) DESC
+    `);
+    const low = await pool.request().query(`
+      SELECT
+        picked.id,
+        picked.name,
+        picked.code,
+        ISNULL(loc.StoreName, N'') AS storeName,
+        picked.qty,
+        picked.reorderLevel
+      FROM (
+        SELECT TOP 8
+          p.ProductId AS id,
+          CASE
+            WHEN REPLACE(REPLACE(LTRIM(RTRIM(ISNULL(p.ProductName, N''))), N'*', N''), N' ', N'') = N''
+            THEN ISNULL(p.ProductCode, '')
+            ELSE ISNULL(p.ProductName, N'')
+          END AS name,
+          ISNULL(p.ProductCode, '') AS code,
+          ISNULL(stock.qty, 0) AS qty,
+          ROUND((ISNULL(stock.qty, 0) + sold.netSold) * 0.10, 2) AS reorderLevel
+        FROM tblProducts p
+        INNER JOIN (
+          SELECT ProductID, SUM(ISNULL(ProductStock, 0)) AS qty
+          FROM tblProductsStores
+          GROUP BY ProductID
+        ) stock ON stock.ProductID = p.ProductId
+        INNER JOIN (
+          SELECT ProductID,
+            SUM(ISNULL(OutQuantity, 0) + ISNULL(OutBonus, 0) - ISNULL(ReturnedQuantity, 0)) AS netSold
+          FROM tblSellingInvoicesDetails
+          GROUP BY ProductID
+        ) sold ON sold.ProductID = p.ProductId
+        WHERE sold.netSold > 0
+          AND ISNULL(stock.qty, 0) >= 0
+          AND ISNULL(stock.qty, 0) * 10 <= (ISNULL(stock.qty, 0) + sold.netSold)
+          AND REPLACE(REPLACE(LTRIM(RTRIM(ISNULL(p.ProductName, N''))), N'*', N''), N' ', N'') <> N''
+        ORDER BY sold.netSold DESC, p.ProductName
+      ) picked
+      OUTER APPLY (
+        SELECT TOP 1 s.StoreName
+        FROM tblProductsStores ps
+        INNER JOIN tblStores s ON s.StoreID = ps.StoreID
+        WHERE ps.ProductID = picked.id
+        ORDER BY ISNULL(ps.ProductStock, 0) DESC, s.StoreName
+      ) loc
     `);
     const recent = await pool.request().query(`
       SELECT TOP 8
@@ -308,12 +526,278 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
       LEFT JOIN tblClients c ON c.ClientId = si.ClientID
       ORDER BY si.SellingInvoiceID DESC
     `);
-    return { counts: counts.recordset[0], recentSales: recent.recordset };
+    const head = summary.recordset[0];
+    const startKey = String(head.periodStart).slice(0, 10);
+    const todayKey = String(head.todayKey).slice(0, 10);
+    return {
+      range: choice.range,
+      monthly: choice.monthly,
+      month: {
+        start: startKey,
+        end: todayKey,
+        sales: Number(head.sales),
+        saleCount: Number(head.saleCount),
+        purchases: Number(head.purchases),
+        purchaseCount: Number(head.purchaseCount),
+        salesDue: Number(head.salesDue),
+        purchaseDue: Number(head.purchaseDue)
+      },
+      days: fillBuckets(trend.recordset, startKey, todayKey, choice.monthly),
+      topProducts: top.recordset,
+      lowStock: low.recordset,
+      recentSales: recent.recordset
+    };
     });
     res.json(payload);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'تعذر تحميل لوحة التحكم' });
+  }
+});
+
+function reportRange(query) {
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  let from = iso.test(String(query.from || '')) ? String(query.from) : `${today.slice(0, 8)}01`;
+  let to = iso.test(String(query.to || '')) ? String(query.to) : today;
+  if (from > to) {
+    const swap = from;
+    from = to;
+    to = swap;
+  }
+  return { from, to };
+}
+
+app.get('/api/reports', requireAuth, async (req, res) => {
+  try {
+    const type = String(req.query.type || 'sales');
+    const allowed = ['sales', 'purchases', 'clients', 'suppliers', 'products', 'stock'];
+    if (!allowed.includes(type)) return res.status(400).json({ error: 'التقرير غير معروف' });
+    const { page, pageSize, start, end } = paging(req);
+    const { from, to } = reportRange(req.query);
+    const q = String(req.query.q || '').trim().slice(0, 80);
+    const storeId = Number(req.query.storeId || 0);
+    const filters = [
+      { name: 'from', type: sql.VarChar(10), value: from },
+      { name: 'to', type: sql.VarChar(10), value: to },
+      { name: 'q', type: sql.NVarChar(80), value: q },
+      { name: 'like', type: sql.NVarChar(90), value: likeOf(q) },
+      { name: 'storeId', type: sql.Int, value: Number.isFinite(storeId) ? storeId : 0 },
+      { name: 'start', type: sql.Int, value: start },
+      { name: 'end', type: sql.Int, value: end }
+    ];
+    const period = `>= CONVERT(datetime, @from, 120) AND `;
+    const periodEnd = `< DATEADD(day, 1, CONVERT(datetime, @to, 120))`;
+    const specs = {
+      sales: {
+        summarySql: `
+          SELECT COUNT(*) AS invoices,
+            ISNULL(SUM(si.SellingInvoiceTotalAmount), 0) AS total,
+            ISNULL(SUM(si.TotalCollectedAmount), 0) AS paid,
+            ISNULL(SUM(si.NotCollectedAmount), 0) AS due
+          FROM tblSellingInvoice si
+          LEFT JOIN tblClients c ON c.ClientId = si.ClientID
+          WHERE si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
+            AND (@q = N'' OR CAST(si.SellingInvoiceNo AS nvarchar(40)) LIKE @like OR c.ClientName LIKE @like)`,
+        pageSql: `
+          WITH numbered AS (
+            SELECT
+              si.SellingInvoiceID AS id,
+              si.SellingInvoiceNo AS no,
+              si.SellingInvoiceDate AS date,
+              ISNULL(c.ClientName, N'') AS name,
+              ISNULL(si.SellingInvoiceTotalAmount, 0) AS total,
+              ISNULL(si.TotalCollectedAmount, 0) AS paid,
+              ISNULL(si.NotCollectedAmount, 0) AS due,
+              ROW_NUMBER() OVER (ORDER BY si.SellingInvoiceDate DESC, si.SellingInvoiceID DESC) AS rn,
+              COUNT(*) OVER () AS totalRows
+            FROM tblSellingInvoice si
+            LEFT JOIN tblClients c ON c.ClientId = si.ClientID
+            WHERE si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
+              AND (@q = N'' OR CAST(si.SellingInvoiceNo AS nvarchar(40)) LIKE @like OR c.ClientName LIKE @like)
+          )
+          SELECT id, no, date, name, total, paid, due, totalRows
+          FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
+      },
+      purchases: {
+        summarySql: `
+          SELECT COUNT(*) AS invoices,
+            ISNULL(SUM(pi.PurchaseInvoiceTotalAmount), 0) AS total,
+            ISNULL(SUM(pi.TotalPaiedAmount), 0) AS paid,
+            ISNULL(SUM(pi.NotPaiedAmount), 0) AS due
+          FROM tblPurchaseInvoice pi
+          LEFT JOIN tblSuppliers s ON s.SupplierID = pi.SupplierID
+          WHERE pi.PurchaseInvoiceDate ${period} pi.PurchaseInvoiceDate ${periodEnd}
+            AND (@q = N'' OR CAST(pi.PurchaseInvoiceNo AS nvarchar(40)) LIKE @like OR s.SupplierName LIKE @like)`,
+        pageSql: `
+          WITH numbered AS (
+            SELECT
+              pi.PurchaseInvoiceID AS id,
+              pi.PurchaseInvoiceNo AS no,
+              pi.PurchaseInvoiceDate AS date,
+              ISNULL(s.SupplierName, N'') AS name,
+              ISNULL(pi.PurchaseInvoiceTotalAmount, 0) AS total,
+              ISNULL(pi.TotalPaiedAmount, 0) AS paid,
+              ISNULL(pi.NotPaiedAmount, 0) AS due,
+              ROW_NUMBER() OVER (ORDER BY pi.PurchaseInvoiceDate DESC, pi.PurchaseInvoiceID DESC) AS rn,
+              COUNT(*) OVER () AS totalRows
+            FROM tblPurchaseInvoice pi
+            LEFT JOIN tblSuppliers s ON s.SupplierID = pi.SupplierID
+            WHERE pi.PurchaseInvoiceDate ${period} pi.PurchaseInvoiceDate ${periodEnd}
+              AND (@q = N'' OR CAST(pi.PurchaseInvoiceNo AS nvarchar(40)) LIKE @like OR s.SupplierName LIKE @like)
+          )
+          SELECT id, no, date, name, total, paid, due, totalRows
+          FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
+      },
+      clients: {
+        summarySql: `
+          SELECT COUNT(*) AS clients, ISNULL(SUM(due), 0) AS due
+          FROM (
+            SELECT SUM(ISNULL(si.NotCollectedAmount, 0)) AS due
+            FROM tblSellingInvoice si
+            INNER JOIN tblClients c ON c.ClientId = si.ClientID
+            WHERE @q = N'' OR c.ClientName LIKE @like
+            GROUP BY si.ClientID
+            HAVING SUM(ISNULL(si.NotCollectedAmount, 0)) > 0
+          ) balances`,
+        pageSql: `
+          WITH numbered AS (
+            SELECT
+              c.ClientId AS id,
+              ISNULL(c.ClientName, N'') AS name,
+              COUNT(*) AS invoices,
+              SUM(ISNULL(si.NotCollectedAmount, 0)) AS due,
+              ROW_NUMBER() OVER (ORDER BY SUM(ISNULL(si.NotCollectedAmount, 0)) DESC, c.ClientName) AS rn,
+              COUNT(*) OVER () AS totalRows
+            FROM tblSellingInvoice si
+            INNER JOIN tblClients c ON c.ClientId = si.ClientID
+            WHERE @q = N'' OR c.ClientName LIKE @like
+            GROUP BY c.ClientId, c.ClientName
+            HAVING SUM(ISNULL(si.NotCollectedAmount, 0)) > 0
+          )
+          SELECT id, name, invoices, due, totalRows
+          FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
+      },
+      suppliers: {
+        summarySql: `
+          SELECT COUNT(*) AS suppliers, ISNULL(SUM(due), 0) AS due
+          FROM (
+            SELECT SUM(ISNULL(pi.NotPaiedAmount, 0)) AS due
+            FROM tblPurchaseInvoice pi
+            INNER JOIN tblSuppliers s ON s.SupplierID = pi.SupplierID
+            WHERE @q = N'' OR s.SupplierName LIKE @like
+            GROUP BY pi.SupplierID
+            HAVING SUM(ISNULL(pi.NotPaiedAmount, 0)) > 0
+          ) balances`,
+        pageSql: `
+          WITH numbered AS (
+            SELECT
+              s.SupplierID AS id,
+              ISNULL(s.SupplierName, N'') AS name,
+              COUNT(*) AS invoices,
+              SUM(ISNULL(pi.NotPaiedAmount, 0)) AS due,
+              ROW_NUMBER() OVER (ORDER BY SUM(ISNULL(pi.NotPaiedAmount, 0)) DESC, s.SupplierName) AS rn,
+              COUNT(*) OVER () AS totalRows
+            FROM tblPurchaseInvoice pi
+            INNER JOIN tblSuppliers s ON s.SupplierID = pi.SupplierID
+            WHERE @q = N'' OR s.SupplierName LIKE @like
+            GROUP BY s.SupplierID, s.SupplierName
+            HAVING SUM(ISNULL(pi.NotPaiedAmount, 0)) > 0
+          )
+          SELECT id, name, invoices, due, totalRows
+          FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
+      },
+      products: {
+        summarySql: `
+          SELECT COUNT(*) AS products, ISNULL(SUM(qty), 0) AS qty, ISNULL(SUM(total), 0) AS total
+          FROM (
+            SELECT SUM(ISNULL(d.OutQuantity, 0)) AS qty, SUM(ISNULL(d.TotalPrice, 0)) AS total
+            FROM tblSellingInvoicesDetails d
+            INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
+            INNER JOIN tblProducts p ON p.ProductId = d.ProductID
+            WHERE si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
+              AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like)
+            GROUP BY p.ProductId
+          ) lines`,
+        pageSql: `
+          WITH grouped AS (
+            SELECT
+              p.ProductId AS id,
+              ISNULL(p.ProductCode, '') AS code,
+              ISNULL(p.ProductName, N'') AS name,
+              SUM(ISNULL(d.OutQuantity, 0)) AS qty,
+              SUM(ISNULL(d.TotalPrice, 0)) AS total
+            FROM tblSellingInvoicesDetails d
+            INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
+            INNER JOIN tblProducts p ON p.ProductId = d.ProductID
+            WHERE si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
+              AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like)
+            GROUP BY p.ProductId, p.ProductCode, p.ProductName
+          ),
+          numbered AS (
+            SELECT id, code, name, qty, total,
+              ROW_NUMBER() OVER (ORDER BY total DESC, name) AS rn,
+              COUNT(*) OVER () AS totalRows
+            FROM grouped
+          )
+          SELECT id, code, name, qty, total, totalRows
+          FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
+      },
+      stock: {
+        summarySql: `
+          SELECT COUNT(*) AS rows, ISNULL(SUM(ps.ProductStock), 0) AS qty
+          FROM tblProductsStores ps
+          INNER JOIN tblProducts p ON p.ProductId = ps.ProductID
+          WHERE ps.ProductStock <> 0
+            AND (@storeId = 0 OR ps.StoreID = @storeId)
+            AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like)`,
+        pageSql: `
+          WITH numbered AS (
+            SELECT
+              ps.StoreID AS storeId,
+              ISNULL(s.StoreName, N'') AS storeName,
+              ISNULL(p.ProductCode, '') AS code,
+              ISNULL(p.ProductName, N'') AS name,
+              ISNULL(ps.ProductStock, 0) AS qty,
+              ROW_NUMBER() OVER (ORDER BY p.ProductName, s.StoreName) AS rn,
+              COUNT(*) OVER () AS totalRows
+            FROM tblProductsStores ps
+            INNER JOIN tblProducts p ON p.ProductId = ps.ProductID
+            INNER JOIN tblStores s ON s.StoreID = ps.StoreID
+            WHERE ps.ProductStock <> 0
+              AND (@storeId = 0 OR ps.StoreID = @storeId)
+              AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like)
+          )
+          SELECT storeId, storeName, code, name, qty, totalRows
+          FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
+      }
+    };
+    const spec = specs[type];
+    const [summaryRows, pageRows] = await Promise.all([
+      runQuery(spec.summarySql, filters),
+      runQuery(spec.pageSql, filters)
+    ]);
+    const summary = summaryRows[0] || {};
+    const total = pageRows[0] ? Number(pageRows[0].totalRows || 0) : 0;
+    res.json({
+      type,
+      from,
+      to,
+      page,
+      pageSize,
+      total,
+      summary,
+      rows: pageRows.map((row) => {
+        const copy = { ...row };
+        delete copy.totalRows;
+        return copy;
+      })
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'تعذر تحميل التقرير' });
   }
 });
 

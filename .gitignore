@@ -6,4 +6,5 @@ dist/
 database_data.js
 warehouse-app/data/users.json
 warehouse-app/data/activity.json
+warehouse-app/data/db-target.json
 warehouse-app/check_api.py

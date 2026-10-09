@@ -7,13 +7,14 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css?v=20261007q">
+  <link rel="icon" type="image/png" href="/logo.png?v=20261009a">
+  <link rel="stylesheet" href="/styles.css?v=20261009k">
 </head>
 <body>
   <section id="loginView" class="login-wrap">
     <div class="login-stage">
       <aside class="login-brand">
-        <img src="/logo.png" alt="AL RAMZY BROTHERS" class="logo">
+        <img src="/logo.png?v=20261009a" alt="الرمزي اخوان" class="logo">
         <h1>إدارة فروع الرمزي</h1>
         <p>مخزون القطع، فواتير البيع والشراء، وحسابات العملاء من شاشة واحدة.</p>
         <ul>
@@ -27,7 +28,7 @@
         <h2>مرحباً بعودتك</h2>
         <label>اسم المستخدم<span class="field"><input id="user" autocomplete="username" required></span></label>
         <label>كلمة السر<span class="field"><input id="password" type="password" autocomplete="current-password" required></span></label>
-        <button type="submit">دخول إلى النظام</button>
+        <button class="primary" type="submit">دخول إلى النظام</button>
         <div id="loginError" class="error"></div>
       </form>
     </div>
@@ -36,7 +37,7 @@
   <div id="appView" class="shell hidden">
     <aside class="side">
       <div class="brand">
-        <img src="/logo.png" alt="AL RAMZY BROTHERS">
+        <img src="/logo.png?v=20261009a" alt="الرمزي اخوان">
         <strong>RAMZY ERP</strong>
       </div>
       <nav id="nav"></nav>
@@ -64,6 +65,7 @@
   </nav>
   <div id="scrim" class="scrim hidden"></div>
   <div id="drawer" class="drawer hidden"></div>
-  <script src="/app.js?v=20261007r"></script>
+  <div id="printRoot"></div>
+  <script src="/app.js?v=20261009k"></script>
 </body>
 </html>
