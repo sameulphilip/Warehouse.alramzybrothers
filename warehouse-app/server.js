@@ -1032,7 +1032,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
             INNER JOIN tblProducts p ON p.ProductId = d.ProductID
             WHERE si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
               AND (@storeId = 0 OR d.StoreID = @storeId)
-              AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like)
+              AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)
             GROUP BY p.ProductId
           ) lines`,
         pageSql: `
@@ -1048,7 +1048,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
             INNER JOIN tblProducts p ON p.ProductId = d.ProductID
             WHERE si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
               AND (@storeId = 0 OR d.StoreID = @storeId)
-              AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like)
+              AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)
             GROUP BY p.ProductId, p.ProductCode, p.ProductName
           ),
           numbered AS (
@@ -1067,11 +1067,12 @@ app.get('/api/reports', requireAuth, async (req, res) => {
           INNER JOIN tblProducts p ON p.ProductId = ps.ProductID
           WHERE ps.ProductStock <> 0
             AND (@storeId = 0 OR ps.StoreID = @storeId)
-            AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like)`,
+            AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)`,
         pageSql: `
           WITH numbered AS (
             SELECT
               ps.StoreID AS storeId,
+              p.ProductId AS id,
               ISNULL(s.StoreName, N'') AS storeName,
               ISNULL(p.ProductCode, '') AS code,
               ISNULL(p.ProductName, N'') AS name,
@@ -1083,9 +1084,9 @@ app.get('/api/reports', requireAuth, async (req, res) => {
             INNER JOIN tblStores s ON s.StoreID = ps.StoreID
             WHERE ps.ProductStock <> 0
               AND (@storeId = 0 OR ps.StoreID = @storeId)
-              AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like)
+              AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)
           )
-          SELECT storeId, storeName, code, name, qty, totalRows
+          SELECT storeId, id, storeName, code, name, qty, totalRows
           FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
       }
     };
@@ -1286,7 +1287,7 @@ app.get('/api/products', requireAuth, async (req, res) => {
       { name: 'q', type: sql.NVarChar(80), value: q },
       { name: 'like', type: sql.NVarChar(90), value: likeOf(q) }
     ];
-    const where = `FROM tblProducts WHERE @q = N'' OR ProductCode LIKE @like OR ProductName LIKE @like`;
+    const where = `FROM tblProducts WHERE @q = N'' OR ProductCode LIKE @like OR ProductName LIKE @like OR CAST(ProductId AS nvarchar(40)) LIKE @like`;
     const [clientCols, supplierCols] = await Promise.all([
       tableCols('tblClients_Products'),
       tableCols('tblSuppliers_Products')
@@ -1994,10 +1995,11 @@ app.get('/api/stock', requireAuth, async (req, res) => {
       INNER JOIN tblStores s ON s.StoreID = ps.StoreID
       WHERE ps.ProductStock <> 0
         AND (@storeId = 0 OR ps.StoreID = @storeId)
-        AND (@q = N'' OR p.ProductCode LIKE @like OR p.ProductName LIKE @like)`;
+        AND (@q = N'' OR p.ProductCode LIKE @like OR p.ProductName LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)`;
     const pageSql = start === 1
       ? `SELECT TOP (@pageSize)
             ps.StoreID AS storeId,
+            p.ProductId AS id,
             ISNULL(s.StoreName, N'') AS storeName,
             ISNULL(p.ProductCode, '') AS code,
             ISNULL(p.ProductName, N'') AS name,
@@ -2007,6 +2009,7 @@ app.get('/api/stock', requireAuth, async (req, res) => {
       : `WITH numbered AS (
           SELECT
             ps.StoreID AS storeId,
+            p.ProductId AS id,
             ISNULL(s.StoreName, N'') AS storeName,
             ISNULL(p.ProductCode, '') AS code,
             ISNULL(p.ProductName, N'') AS name,
@@ -2014,7 +2017,7 @@ app.get('/api/stock', requireAuth, async (req, res) => {
             ROW_NUMBER() OVER (ORDER BY p.ProductCode, s.StoreName) AS rn
           ${where}
         )
-        SELECT storeId, storeName, code, name, qty
+        SELECT storeId, id, storeName, code, name, qty
         FROM numbered
         WHERE rn BETWEEN @start AND @end
         ORDER BY rn`;
