@@ -1,7 +1,9 @@
-const { app, BrowserWindow, shell, Menu } = require('electron');
+const { app, BrowserWindow, shell, Menu, session } = require('electron');
+const fs = require('fs');
 const path = require('path');
 
 const START_URL = 'https://warehouse.alramzybrothers.com';
+const APP_KEY = fs.readFileSync(path.join(__dirname, 'app-key'), 'utf8').trim();
 
 app.setAppUserModelId('com.alramzybrothers.erp');
 
@@ -72,6 +74,13 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ['https://warehouse.alramzybrothers.com/*'] },
+    (details, callback) => {
+      details.requestHeaders['X-Ramzy-Client'] = APP_KEY;
+      callback({ requestHeaders: details.requestHeaders });
+    }
+  );
   const win = createWindow();
   app.on('second-instance', () => {
     if (win.isMinimized()) win.restore();

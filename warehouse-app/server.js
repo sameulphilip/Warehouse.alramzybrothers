@@ -108,8 +108,75 @@ async function switchDatabase(target) {
   return pool;
 }
 
+const GATE_COOKIE = 'ramzy_client';
+
+function tokensMatch(given) {
+  const expected = process.env.APP_GATE_KEY || '';
+  if (!expected || !given) return false;
+  const left = Buffer.from(String(given));
+  const right = Buffer.from(expected);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function cookieToken(req) {
+  const raw = req.headers.cookie || '';
+  for (const part of raw.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 1) continue;
+    if (part.slice(0, eq).trim() !== GATE_COOKIE) continue;
+    try { return decodeURIComponent(part.slice(eq + 1).trim()); } catch (error) { return ''; }
+  }
+  return '';
+}
+
+function appGate(req, res, next) {
+  const headerOk = tokensMatch(req.get('x-ramzy-client'));
+  const cookieOk = tokensMatch(cookieToken(req));
+  if (headerOk || cookieOk) {
+    if (headerOk && !cookieOk) {
+      res.cookie(GATE_COOKIE, process.env.APP_GATE_KEY, {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'lax',
+        maxAge: 400 * 24 * 60 * 60 * 1000,
+        path: '/'
+      });
+    }
+    return next();
+  }
+  if (req.method === 'GET' && req.path === '/logo.png') return next();
+  if (req.path.startsWith('/api/')) {
+    res.status(403).json({ error: 'النظام يتفتح من تطبيق الرمزي فقط' });
+    return;
+  }
+  res.status(403).type('html').send(`<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>الرمزي</title>
+  <link rel="icon" type="image/png" href="/logo.png?v=20261009a">
+  <style>
+    body { margin: 0; min-height: 100dvh; display: grid; place-items: center; background: #f4f7fe; color: #1b2559; font-family: "Segoe UI", Tahoma, sans-serif; }
+    main { width: min(420px, calc(100% - 32px)); background: #fff; border: 1px solid #e1e7f2; border-radius: 12px; padding: 28px 22px; text-align: center; }
+    img { width: 112px; height: auto; margin-bottom: 14px; }
+    h1 { margin: 0 0 8px; font-size: 1.4rem; }
+    p { margin: 0; color: #707eae; line-height: 1.8; }
+  </style>
+</head>
+<body>
+  <main>
+    <img src="/logo.png?v=20261009a" alt="الرمزي اخوان">
+    <h1>الرمزي إخوان</h1>
+    <p>النظام يتفتح من تطبيق الرمزي على الكمبيوتر أو الموبايل.</p>
+  </main>
+</body>
+</html>`);
+}
+
 const app = express();
 app.set('trust proxy', 1);
+app.use(appGate);
 app.use(express.json());
 app.use(session({
   secret: SESSION_SECRET,
@@ -124,7 +191,10 @@ app.use(session({
 }));
 app.use('/api', (req, res, next) => {
   res.set('Cache-Control', 'no-store');
-  next();
+  if (readTarget() !== 'standby' || req.method === 'GET' || req.method === 'HEAD') return next();
+  const pathOnly = req.originalUrl.split('?')[0];
+  if (pathOnly === '/api/login' || pathOnly === '/api/logout' || pathOnly === '/api/database/switch') return next();
+  return res.status(403).json({ error: 'النسخة الخارجية للعرض فقط، ولا يمكن تنفيذ هذا الإجراء' });
 });
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders(res, filePath) {
@@ -279,7 +349,7 @@ async function queryPage(sqlText, inputs) {
 }
 
 app.get('/api/me', (req, res) => {
-  res.json({ user: currentUser(req) });
+  res.json({ user: currentUser(req), readOnly: readTarget() === 'standby' });
 });
 
 app.post('/api/login', (req, res) => {
@@ -292,7 +362,7 @@ app.post('/api/login', (req, res) => {
   const user = publicUser(found);
   req.session.user = user;
   recordActivity(req, { action: 'login', detail: 'دخول إلى النظام' });
-  res.json({ ok: true, user });
+  res.json({ ok: true, user, readOnly: readTarget() === 'standby' });
 });
 
 app.get('/api/users', requireSuper, (req, res) => {
@@ -356,9 +426,8 @@ app.get('/api/database', requireSuper, async (req, res) => {
 app.post('/api/database/switch', requireSuper, async (req, res) => {
   try {
     const want = req.body && req.body.target === 'standby' ? 'standby' : 'primary';
-    if (want === readTarget()) return res.json({ ok: true, target: want });
+    if (want === readTarget()) return res.json({ ok: true, target: want, readOnly: want === 'standby' });
     if (want === 'standby') {
-      if (await pingDatabase('primary')) return res.status(400).json({ error: 'القاعدة الأساسية لسه متصلة' });
       if (!(await pingDatabase('standby'))) return res.status(400).json({ error: 'النسخة الخارجية غير جاهزة' });
     } else if (!(await pingDatabase('primary'))) {
       return res.status(400).json({ error: 'القاعدة الأساسية لسه واقفة' });
@@ -367,7 +436,7 @@ app.post('/api/database/switch', requireSuper, async (req, res) => {
     memoryCache.clear();
     const label = want === 'standby' ? 'النسخة الخارجية' : 'القاعدة الأساسية';
     recordActivity(req, { action: 'database', detail: `تحويل قاعدة الموقع إلى ${label}`, ref: `database:${want}` });
-    res.json({ ok: true, target: want });
+    res.json({ ok: true, target: want, readOnly: want === 'standby' });
   } catch (error) {
     console.error(error);
     res.status(400).json({ error: 'تعذر التحويل لقاعدة البيانات' });
@@ -417,33 +486,68 @@ function fillBuckets(rows, startKey, todayKey, monthly) {
 app.get('/api/dashboard', requireAuth, async (req, res) => {
   try {
     const choice = dashboardRange(req.query.range);
-    const payload = await cached(`dashboard:${choice.range}`, 60000, async () => {
+    const storeId = Number(req.query.storeId || 0);
+    const store = Number.isFinite(storeId) && storeId > 0 ? storeId : 0;
+    const payload = await cached(`dashboard:${choice.range}:${store}`, 60000, async () => {
     const pool = await poolPromise;
     const periodSql = `
-      DECLARE @today datetime, @monthStart datetime, @start datetime, @end datetime
+      DECLARE @today datetime, @monthStart datetime, @start datetime, @end datetime, @prevStart datetime, @prevEnd datetime
       SET @today = DATEADD(day, DATEDIFF(day, 0, GETDATE()), 0)
       SET @monthStart = DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
       SET @start = DATEADD(month, -@back, @monthStart)
       SET @end = DATEADD(day, 1, @today)
+      SET @prevStart = DATEADD(month, -(@back + 1), @start)
+      SET @prevEnd = DATEADD(month, -(@back + 1), @end)
     `;
+    const saleMoney = store
+      ? `ISNULL((SELECT SUM(ISNULL(d.TotalPrice, 0)) FROM tblSellingInvoicesDetails d INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID WHERE d.StoreID = @store AND si.SellingInvoiceDate >= @start AND si.SellingInvoiceDate < @end), 0)`
+      : `ISNULL((SELECT SUM(SellingInvoiceTotalAmount) FROM tblSellingInvoice WHERE SellingInvoiceDate >= @start AND SellingInvoiceDate < @end), 0)`;
+    const saleCount = store
+      ? `ISNULL((SELECT COUNT(DISTINCT si.SellingInvoiceID) FROM tblSellingInvoicesDetails d INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID WHERE d.StoreID = @store AND si.SellingInvoiceDate >= @start AND si.SellingInvoiceDate < @end), 0)`
+      : `ISNULL((SELECT COUNT(*) FROM tblSellingInvoice WHERE SellingInvoiceDate >= @start AND SellingInvoiceDate < @end), 0)`;
+    const prevSales = store
+      ? `ISNULL((SELECT SUM(ISNULL(d.TotalPrice, 0)) FROM tblSellingInvoicesDetails d INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID WHERE d.StoreID = @store AND si.SellingInvoiceDate >= @prevStart AND si.SellingInvoiceDate < @prevEnd), 0)`
+      : `ISNULL((SELECT SUM(SellingInvoiceTotalAmount) FROM tblSellingInvoice WHERE SellingInvoiceDate >= @prevStart AND SellingInvoiceDate < @prevEnd), 0)`;
+    const buyMoney = store
+      ? `ISNULL((SELECT SUM(ISNULL(d.TotalPricePerProduct, 0)) FROM tblPurchaseInvoicesDetails d INNER JOIN tblPurchaseInvoice pi ON pi.PurchaseInvoiceID = d.PurchaseInvoiceID WHERE d.StoreID = @store AND pi.PurchaseInvoiceDate >= @start AND pi.PurchaseInvoiceDate < @end), 0)`
+      : `ISNULL((SELECT SUM(PurchaseInvoiceTotalAmount) FROM tblPurchaseInvoice WHERE PurchaseInvoiceDate >= @start AND PurchaseInvoiceDate < @end), 0)`;
+    const buyCount = store
+      ? `ISNULL((SELECT COUNT(DISTINCT pi.PurchaseInvoiceID) FROM tblPurchaseInvoicesDetails d INNER JOIN tblPurchaseInvoice pi ON pi.PurchaseInvoiceID = d.PurchaseInvoiceID WHERE d.StoreID = @store AND pi.PurchaseInvoiceDate >= @start AND pi.PurchaseInvoiceDate < @end), 0)`
+      : `ISNULL((SELECT COUNT(*) FROM tblPurchaseInvoice WHERE PurchaseInvoiceDate >= @start AND PurchaseInvoiceDate < @end), 0)`;
+    const prevBuys = store
+      ? `ISNULL((SELECT SUM(ISNULL(d.TotalPricePerProduct, 0)) FROM tblPurchaseInvoicesDetails d INNER JOIN tblPurchaseInvoice pi ON pi.PurchaseInvoiceID = d.PurchaseInvoiceID WHERE d.StoreID = @store AND pi.PurchaseInvoiceDate >= @prevStart AND pi.PurchaseInvoiceDate < @prevEnd), 0)`
+      : `ISNULL((SELECT SUM(PurchaseInvoiceTotalAmount) FROM tblPurchaseInvoice WHERE PurchaseInvoiceDate >= @prevStart AND PurchaseInvoiceDate < @prevEnd), 0)`;
     const summaryRequest = pool.request();
     summaryRequest.input('back', sql.Int, choice.back);
+    summaryRequest.input('store', sql.Int, store);
     const summary = await summaryRequest.query(`
       ${periodSql}
       SELECT
         CONVERT(char(10), @today, 120) AS todayKey,
         CONVERT(char(10), @start, 120) AS periodStart,
-        (SELECT ISNULL(SUM(SellingInvoiceTotalAmount), 0) FROM tblSellingInvoice WHERE SellingInvoiceDate >= @start AND SellingInvoiceDate < @end) AS sales,
-        (SELECT COUNT(*) FROM tblSellingInvoice WHERE SellingInvoiceDate >= @start AND SellingInvoiceDate < @end) AS saleCount,
-        (SELECT ISNULL(SUM(PurchaseInvoiceTotalAmount), 0) FROM tblPurchaseInvoice WHERE PurchaseInvoiceDate >= @start AND PurchaseInvoiceDate < @end) AS purchases,
-        (SELECT COUNT(*) FROM tblPurchaseInvoice WHERE PurchaseInvoiceDate >= @start AND PurchaseInvoiceDate < @end) AS purchaseCount,
+        ${saleMoney} AS sales,
+        ${saleCount} AS saleCount,
+        ${prevSales} AS prevSales,
+        ${buyMoney} AS purchases,
+        ${buyCount} AS purchaseCount,
+        ${prevBuys} AS prevPurchases,
         (SELECT ISNULL(SUM(NotCollectedAmount), 0) FROM tblSellingInvoice) AS salesDue,
         (SELECT ISNULL(SUM(NotPaiedAmount), 0) FROM tblPurchaseInvoice) AS purchaseDue
     `);
     const trendRequest = pool.request();
     trendRequest.input('back', sql.Int, choice.back);
+    trendRequest.input('store', sql.Int, store);
     const bucket = choice.monthly ? 'char(7)' : 'char(10)';
-    const trend = await trendRequest.query(`
+    const trend = await trendRequest.query(store ? `
+      ${periodSql}
+      SELECT CONVERT(${bucket}, si.SellingInvoiceDate, 120) AS bucket,
+             ISNULL(SUM(d.TotalPrice), 0) AS total
+      FROM tblSellingInvoicesDetails d
+      INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
+      WHERE d.StoreID = @store
+        AND si.SellingInvoiceDate >= @start AND si.SellingInvoiceDate < @end
+      GROUP BY CONVERT(${bucket}, si.SellingInvoiceDate, 120)
+    ` : `
       ${periodSql}
       SELECT CONVERT(${bucket}, SellingInvoiceDate, 120) AS bucket,
              ISNULL(SUM(SellingInvoiceTotalAmount), 0) AS total
@@ -453,6 +557,7 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
     `);
     const topRequest = pool.request();
     topRequest.input('back', sql.Int, choice.back);
+    topRequest.input('store', sql.Int, store);
     const top = await topRequest.query(`
       ${periodSql}
       SELECT TOP 5
@@ -465,10 +570,13 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
       INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
       INNER JOIN tblProducts p ON p.ProductId = d.ProductID
       WHERE si.SellingInvoiceDate >= @start AND si.SellingInvoiceDate < @end
+        AND (@store = 0 OR d.StoreID = @store)
       GROUP BY p.ProductId, p.ProductName, p.ProductCode
       ORDER BY SUM(ISNULL(d.TotalPrice, 0)) DESC
     `);
-    const low = await pool.request().query(`
+    const lowRequest = pool.request();
+    lowRequest.input('store', sql.Int, store);
+    const low = await lowRequest.query(`
       SELECT
         picked.id,
         picked.name,
@@ -491,12 +599,14 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
         INNER JOIN (
           SELECT ProductID, SUM(ISNULL(ProductStock, 0)) AS qty
           FROM tblProductsStores
+          WHERE @store = 0 OR StoreID = @store
           GROUP BY ProductID
         ) stock ON stock.ProductID = p.ProductId
         INNER JOIN (
           SELECT ProductID,
             SUM(ISNULL(OutQuantity, 0) + ISNULL(OutBonus, 0) - ISNULL(ReturnedQuantity, 0)) AS netSold
           FROM tblSellingInvoicesDetails
+          WHERE @store = 0 OR StoreID = @store
           GROUP BY ProductID
         ) sold ON sold.ProductID = p.ProductId
         WHERE sold.netSold > 0
@@ -510,11 +620,13 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
         FROM tblProductsStores ps
         INNER JOIN tblStores s ON s.StoreID = ps.StoreID
         WHERE ps.ProductID = picked.id
-        ORDER BY ISNULL(ps.ProductStock, 0) DESC, s.StoreName
+        ORDER BY CASE WHEN @store > 0 AND ps.StoreID = @store THEN 0 ELSE 1 END, ISNULL(ps.ProductStock, 0) DESC, s.StoreName
       ) loc
     `);
-    const recent = await pool.request().query(`
-      SELECT TOP 8
+    const recentRequest = pool.request();
+    recentRequest.input('store', sql.Int, store);
+    const recent = await recentRequest.query(`
+      SELECT TOP 3
         si.SellingInvoiceID AS id,
         si.SellingInvoiceNo AS no,
         si.SellingInvoiceDate AS date,
@@ -524,6 +636,10 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
         ISNULL(si.InsertedBy, N'') AS byName
       FROM tblSellingInvoice si
       LEFT JOIN tblClients c ON c.ClientId = si.ClientID
+      WHERE @store = 0 OR EXISTS (
+        SELECT 1 FROM tblSellingInvoicesDetails d
+        WHERE d.SellingInvoiceID = si.SellingInvoiceID AND d.StoreID = @store
+      )
       ORDER BY si.SellingInvoiceID DESC
     `);
     const head = summary.recordset[0];
@@ -531,14 +647,17 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
     const todayKey = String(head.todayKey).slice(0, 10);
     return {
       range: choice.range,
+      store,
       monthly: choice.monthly,
       month: {
         start: startKey,
         end: todayKey,
         sales: Number(head.sales),
         saleCount: Number(head.saleCount),
+        prevSales: Number(head.prevSales),
         purchases: Number(head.purchases),
         purchaseCount: Number(head.purchaseCount),
+        prevPurchases: Number(head.prevPurchases),
         salesDue: Number(head.salesDue),
         purchaseDue: Number(head.purchaseDue)
       },
@@ -570,13 +689,206 @@ function reportRange(query) {
   return { from, to };
 }
 
+function partyReportSpec(type, period, periodEnd) {
+  const span = (column) => `${column} ${period} ${column} ${periodEnd}`;
+  const productMoves = `
+    SELECT N'بيع' AS kind, CAST(si.SellingInvoiceID AS numeric(18,0)) AS docId, CAST(si.SellingInvoiceNo AS numeric(18,0)) AS no,
+      si.SellingInvoiceDate AS date, ISNULL(NULLIF(LTRIM(RTRIM(c.ClientName)), N''), N'عميل نقدي') AS party,
+      ISNULL(st.StoreName, N'') AS storeName, CAST(0 AS float) AS qtyIn, CAST(ISNULL(d.OutQuantity, 0) AS float) AS qtyOut,
+      CAST(ISNULL(NULLIF(d.SellingPricePerUnit, 0), ISNULL(d.LotPricePerUnit, 0)) AS float) AS price,
+      CAST(ISNULL(d.TotalPricePerProduct, 0) AS float) AS total, N'sales' AS openAs
+    FROM tblSellingInvoicesDetails d
+    INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
+    LEFT JOIN tblClients c ON c.ClientId = si.ClientID
+    LEFT JOIN tblStores st ON st.StoreID = d.StoreID
+    WHERE d.ProductID = @partyId AND ${span('si.SellingInvoiceDate')} AND (@storeId = 0 OR d.StoreID = @storeId)
+    UNION ALL
+    SELECT N'شراء', CAST(pi.PurchaseInvoiceID AS numeric(18,0)), CAST(pi.PurchaseInvoiceNo AS numeric(18,0)),
+      pi.PurchaseInvoiceDate, ISNULL(NULLIF(LTRIM(RTRIM(s.SupplierName)), N''), N'بدون مورد'),
+      ISNULL(st.StoreName, N''), CAST(ISNULL(d.InQuantity, 0) AS float), CAST(0 AS float),
+      CAST(ISNULL(d.PurchasePrice, 0) AS float), CAST(ISNULL(d.TotalPricePerProduct, 0) AS float), N'purchases'
+    FROM tblPurchaseInvoicesDetails d
+    INNER JOIN tblPurchaseInvoice pi ON pi.PurchaseInvoiceID = d.PurchaseInvoiceID
+    LEFT JOIN tblSuppliers s ON s.SupplierID = pi.SupplierID
+    LEFT JOIN tblStores st ON st.StoreID = d.StoreID
+    WHERE d.ProductID = @partyId AND ${span('pi.PurchaseInvoiceDate')} AND (@storeId = 0 OR d.StoreID = @storeId)
+    UNION ALL
+    SELECT N'مرتجع بيع', CAST(r.ReturnSellPermissionID AS numeric(18,0)), CAST(r.ReturnSellPermissionNo AS numeric(18,0)),
+      r.ReturnSellPermissionDate, ISNULL(NULLIF(LTRIM(RTRIM(c.ClientName)), N''), N'عميل نقدي'),
+      ISNULL(st.StoreName, N''), CAST(ISNULL(d.InQuantity, 0) AS float), CAST(0 AS float),
+      CAST(ISNULL(d.LotPricePerUnit, 0) AS float), CAST(ISNULL(d.TotalPricePerProduct, 0) AS float), N''
+    FROM tblReturnSellPermissionDetails d
+    INNER JOIN tblReturnSellPermission r ON r.ReturnSellPermissionID = d.ReturnSellPermissionID
+    LEFT JOIN tblClients c ON c.ClientId = r.ClientID
+    LEFT JOIN tblStores st ON st.StoreID = d.StoreID
+    WHERE d.ProductID = @partyId AND ${span('r.ReturnSellPermissionDate')} AND (@storeId = 0 OR d.StoreID = @storeId)
+    UNION ALL
+    SELECT N'مرتجع شراء', CAST(r.ReturnPurchasePermissionID AS numeric(18,0)), CAST(r.ReturnPurchasePermissionNo AS numeric(18,0)),
+      r.ReturnPurchasePermissionDate, ISNULL(NULLIF(LTRIM(RTRIM(s.SupplierName)), N''), N'بدون مورد'),
+      ISNULL(st.StoreName, N''), CAST(0 AS float), CAST(ISNULL(d.OutQuantity, 0) AS float),
+      CAST(ISNULL(d.PurchasePrice, 0) AS float), CAST(ISNULL(d.TotalPricePerProduct, 0) AS float), N''
+    FROM tblReturnPurchasePermissionDetails d
+    INNER JOIN tblReturnPurchasePermission r ON r.ReturnPurchasePermissionID = d.ReturnPurchasePermissionID
+    LEFT JOIN tblSuppliers s ON s.SupplierID = r.SupplierID
+    LEFT JOIN tblStores st ON st.StoreID = d.StoreID
+    WHERE d.ProductID = @partyId AND ${span('r.ReturnPurchasePermissionDate')} AND (@storeId = 0 OR d.StoreID = @storeId)
+    UNION ALL
+    SELECT CASE WHEN ISNULL(i.InQuantity, 0) > 0 AND ISNULL(i.OutQuantity, 0) = 0 THEN N'جرد دخول' ELSE N'جرد خروج' END,
+      CAST(ISNULL(i.InvoiceNo, 0) AS numeric(18,0)), CAST(ISNULL(i.InvoiceNo, 0) AS numeric(18,0)),
+      ISNULL(i.InvoiceDate, i.DocumentDate), N'', ISNULL(st.StoreName, N''),
+      CAST(ISNULL(i.InQuantity, 0) AS float), CAST(ISNULL(i.OutQuantity, 0) AS float),
+      CAST(ISNULL(NULLIF(i.LotPricePerUnit, 0), ISNULL(i.PurchasePricePerUnit, 0)) AS float),
+      CAST(CASE WHEN ISNULL(i.TotalLotPrice, 0) <> 0 THEN i.TotalLotPrice
+        ELSE (ISNULL(i.InQuantity, 0) + ISNULL(i.OutQuantity, 0)) * ISNULL(NULLIF(i.LotPricePerUnit, 0), ISNULL(i.PurchasePricePerUnit, 0)) END AS float),
+      N''
+    FROM tblInventory i
+    LEFT JOIN tblStores st ON st.StoreID = i.StoreID
+    WHERE i.ProductID = @partyId AND i.TransactionID = 15 AND ${span('ISNULL(i.InvoiceDate, i.DocumentDate)')} AND (@storeId = 0 OR i.StoreID = @storeId)
+    UNION ALL
+    SELECT CASE WHEN ISNULL(i.InQuantity, 0) > 0 AND ISNULL(i.OutQuantity, 0) = 0 THEN N'تحويل دخول' ELSE N'تحويل خروج' END,
+      CAST(ISNULL(i.InvoiceNo, 0) AS numeric(18,0)), CAST(ISNULL(i.InvoiceNo, 0) AS numeric(18,0)),
+      ISNULL(i.InvoiceDate, i.DocumentDate), N'', ISNULL(st.StoreName, N''),
+      CAST(ISNULL(i.InQuantity, 0) AS float), CAST(ISNULL(i.OutQuantity, 0) AS float),
+      CAST(ISNULL(NULLIF(i.LotPricePerUnit, 0), ISNULL(i.PurchasePricePerUnit, 0)) AS float),
+      CAST(CASE WHEN ISNULL(i.TotalLotPrice, 0) <> 0 THEN i.TotalLotPrice
+        ELSE (ISNULL(i.InQuantity, 0) + ISNULL(i.OutQuantity, 0)) * ISNULL(NULLIF(i.LotPricePerUnit, 0), ISNULL(i.PurchasePricePerUnit, 0)) END AS float),
+      N''
+    FROM tblInventory i
+    LEFT JOIN tblStores st ON st.StoreID = i.StoreID
+    WHERE i.ProductID = @partyId AND i.TransactionID = 16 AND ${span('ISNULL(i.InvoiceDate, i.DocumentDate)')} AND (@storeId = 0 OR i.StoreID = @storeId)`;
+  const clientMoves = `
+    SELECT N'فاتورة بيع' AS kind, CAST(si.SellingInvoiceID AS numeric(18,0)) AS docId, CAST(si.SellingInvoiceNo AS numeric(18,0)) AS no,
+      si.SellingInvoiceDate AS date, CAST(ISNULL(si.SellingInvoiceTotalAmount, 0) AS float) AS total,
+      CAST(ISNULL(si.TotalCollectedAmount, 0) AS float) AS paid, CAST(ISNULL(si.NotCollectedAmount, 0) AS float) AS due,
+      N'' AS note, N'sales' AS openAs
+    FROM tblSellingInvoice si
+    WHERE si.ClientID = @partyId AND ${span('si.SellingInvoiceDate')}
+    UNION ALL
+    SELECT N'مرتجع بيع', CAST(r.ReturnSellPermissionID AS numeric(18,0)), CAST(r.ReturnSellPermissionNo AS numeric(18,0)),
+      r.ReturnSellPermissionDate, CAST(ISNULL(r.ReturnSellPermissionTotalAmount, 0) AS float), CAST(0 AS float), CAST(0 AS float),
+      N'فاتورة ' + CAST(r.SellingInvoiceNo AS nvarchar(40)), N''
+    FROM tblReturnSellPermission r
+    WHERE r.ClientID = @partyId AND ${span('r.ReturnSellPermissionDate')}
+    UNION ALL
+    SELECT CASE WHEN so.SafeOperationTypeID = 2 THEN N'صرف' ELSE N'تحصيل' END,
+      CAST(so.OperationID AS numeric(18,0)), CAST(ISNULL(so.SafeOperationDocumentNo, 0) AS numeric(18,0)),
+      so.SafeOperationDate, CAST(ISNULL(cd.Collected, ISNULL(so.SafeOperationTotalAmount, 0)) AS float),
+      CAST(ISNULL(cd.Collected, ISNULL(so.SafeOperationTotalAmount, 0)) AS float), CAST(0 AS float),
+      LTRIM(RTRIM(CASE WHEN si.SellingInvoiceNo IS NULL THEN N'' ELSE N'فاتورة ' + CAST(si.SellingInvoiceNo AS nvarchar(40)) END
+        + CASE WHEN ISNULL(so.OperationDescription, N'') = N'' THEN N'' ELSE N' ' + so.OperationDescription END)), N''
+    FROM tblSellingInvoicesCollectingDetails cd
+    INNER JOIN tblSafeOperations so ON so.OperationID = cd.SafeOperationID
+    LEFT JOIN tblSellingInvoice si ON si.SellingInvoiceID = cd.SellingInvoiceID
+    WHERE ISNULL(NULLIF(si.ClientID, 0), NULLIF(cd.ClientID, 0)) = @partyId AND ${span('so.SafeOperationDate')}
+    UNION ALL
+    SELECT N'تحصيل', CAST(si.SellingInvoiceID AS numeric(18,0)), CAST(si.SellingInvoiceNo AS numeric(18,0)),
+      si.SellingInvoiceDate, CAST(ISNULL(si.TotalCollectedAmount, 0) AS float),
+      CAST(ISNULL(si.TotalCollectedAmount, 0) AS float), CAST(0 AS float),
+      N'مدفوع على الفاتورة ' + CAST(si.SellingInvoiceNo AS nvarchar(40)), N''
+    FROM tblSellingInvoice si
+    WHERE si.ClientID = @partyId AND ISNULL(si.TotalCollectedAmount, 0) > 0 AND ${span('si.SellingInvoiceDate')}
+      AND NOT EXISTS (SELECT 1 FROM tblSellingInvoicesCollectingDetails cd WHERE cd.SellingInvoiceID = si.SellingInvoiceID)
+    UNION ALL
+    SELECT CASE WHEN so.SafeOperationTypeID = 2 THEN N'صرف' ELSE N'تحصيل' END,
+      CAST(so.OperationID AS numeric(18,0)), CAST(ISNULL(so.SafeOperationDocumentNo, 0) AS numeric(18,0)),
+      so.SafeOperationDate, CAST(ISNULL(so.SafeOperationTotalAmount, 0) AS float),
+      CAST(ISNULL(so.SafeOperationTotalAmount, 0) AS float), CAST(0 AS float),
+      ISNULL(so.OperationDescription, N''), N''
+    FROM tblSafeOperations so
+    WHERE so.ClientID = @partyId AND ${span('so.SafeOperationDate')}
+      AND NOT EXISTS (SELECT 1 FROM tblSellingInvoicesCollectingDetails cd WHERE cd.SafeOperationID = so.OperationID)`;
+  const supplierMoves = `
+    SELECT N'فاتورة شراء' AS kind, CAST(pi.PurchaseInvoiceID AS numeric(18,0)) AS docId, CAST(pi.PurchaseInvoiceNo AS numeric(18,0)) AS no,
+      pi.PurchaseInvoiceDate AS date, CAST(ISNULL(pi.PurchaseInvoiceTotalAmount, 0) AS float) AS total,
+      CAST(ISNULL(pi.TotalPaiedAmount, 0) AS float) AS paid, CAST(ISNULL(pi.NotPaiedAmount, 0) AS float) AS due,
+      N'' AS note, N'purchases' AS openAs
+    FROM tblPurchaseInvoice pi
+    WHERE pi.SupplierID = @partyId AND ${span('pi.PurchaseInvoiceDate')}
+    UNION ALL
+    SELECT N'مرتجع شراء', CAST(r.ReturnPurchasePermissionID AS numeric(18,0)), CAST(r.ReturnPurchasePermissionNo AS numeric(18,0)),
+      r.ReturnPurchasePermissionDate, CAST(ISNULL(r.ReturnPurchasePermissionTotalAmount, 0) AS float), CAST(0 AS float), CAST(0 AS float),
+      N'فاتورة ' + CAST(r.PurchaseInvoiceNo AS nvarchar(40)), N''
+    FROM tblReturnPurchasePermission r
+    WHERE r.SupplierID = @partyId AND ${span('r.ReturnPurchasePermissionDate')}
+    UNION ALL
+    SELECT CASE WHEN so.SafeOperationTypeID = 1 THEN N'تحصيل' ELSE N'سداد' END,
+      CAST(so.OperationID AS numeric(18,0)), CAST(ISNULL(so.SafeOperationDocumentNo, 0) AS numeric(18,0)),
+      so.SafeOperationDate, CAST(ISNULL(pd.Paied, ISNULL(so.SafeOperationTotalAmount, 0)) AS float),
+      CAST(ISNULL(pd.Paied, ISNULL(so.SafeOperationTotalAmount, 0)) AS float), CAST(0 AS float),
+      LTRIM(RTRIM(CASE WHEN pi.PurchaseInvoiceNo IS NULL THEN N'' ELSE N'فاتورة ' + CAST(pi.PurchaseInvoiceNo AS nvarchar(40)) END
+        + CASE WHEN ISNULL(so.OperationDescription, N'') = N'' THEN N'' ELSE N' ' + so.OperationDescription END)), N''
+    FROM tblPurchaseInvoicesPayingDetails pd
+    INNER JOIN tblSafeOperations so ON so.OperationID = pd.SafeOperationID
+    LEFT JOIN tblPurchaseInvoice pi ON pi.PurchaseInvoiceID = pd.PurchaseInvoiceID
+    WHERE ISNULL(NULLIF(pi.SupplierID, 0), NULLIF(pd.SupplierID, 0)) = @partyId AND ${span('so.SafeOperationDate')}
+    UNION ALL
+    SELECT N'سداد', CAST(pi.PurchaseInvoiceID AS numeric(18,0)), CAST(pi.PurchaseInvoiceNo AS numeric(18,0)),
+      pi.PurchaseInvoiceDate, CAST(ISNULL(pi.TotalPaiedAmount, 0) AS float),
+      CAST(ISNULL(pi.TotalPaiedAmount, 0) AS float), CAST(0 AS float),
+      N'مدفوع على الفاتورة ' + CAST(pi.PurchaseInvoiceNo AS nvarchar(40)), N''
+    FROM tblPurchaseInvoice pi
+    WHERE pi.SupplierID = @partyId AND ISNULL(pi.TotalPaiedAmount, 0) > 0 AND ${span('pi.PurchaseInvoiceDate')}
+      AND NOT EXISTS (SELECT 1 FROM tblPurchaseInvoicesPayingDetails pd WHERE pd.PurchaseInvoiceID = pi.PurchaseInvoiceID)
+    UNION ALL
+    SELECT CASE WHEN so.SafeOperationTypeID = 1 THEN N'تحصيل' ELSE N'سداد' END,
+      CAST(so.OperationID AS numeric(18,0)), CAST(ISNULL(so.SafeOperationDocumentNo, 0) AS numeric(18,0)),
+      so.SafeOperationDate, CAST(ISNULL(so.SafeOperationTotalAmount, 0) AS float),
+      CAST(ISNULL(so.SafeOperationTotalAmount, 0) AS float), CAST(0 AS float),
+      ISNULL(so.OperationDescription, N''), N''
+    FROM tblSafeOperations so
+    WHERE so.SupplierID = @partyId AND ${span('so.SafeOperationDate')}
+      AND NOT EXISTS (SELECT 1 FROM tblPurchaseInvoicesPayingDetails pd WHERE pd.SafeOperationID = so.OperationID)`;
+  const moves = type === 'productMove' ? productMoves : type === 'clientHistory' ? clientMoves : supplierMoves;
+  const filteredWhere = type === 'productMove'
+    ? `@q = N'' OR party LIKE @like OR kind LIKE @like OR storeName LIKE @like OR CAST(no AS nvarchar(40)) LIKE @like`
+    : `@q = N'' OR kind LIKE @like OR note LIKE @like OR CAST(no AS nvarchar(40)) LIKE @like`;
+  const summarySelect = type === 'productMove'
+    ? `COUNT(*) AS moves,
+        ISNULL(SUM(CASE WHEN kind = N'بيع' THEN qtyOut ELSE 0 END), 0) AS sold,
+        ISNULL(SUM(CASE WHEN kind = N'شراء' THEN qtyIn ELSE 0 END), 0) AS bought,
+        ISNULL(SUM(CASE WHEN kind = N'مرتجع بيع' THEN qtyIn ELSE 0 END), 0) AS saleReturns,
+        ISNULL(SUM(CASE WHEN kind = N'مرتجع شراء' THEN qtyOut ELSE 0 END), 0) AS purchaseReturns,
+        ISNULL(SUM(CASE WHEN kind = N'بيع' THEN total ELSE 0 END), 0) AS salesTotal,
+        ISNULL(SUM(CASE WHEN kind = N'شراء' THEN total ELSE 0 END), 0) AS purchaseTotal`
+    : type === 'clientHistory'
+      ? `SUM(CASE WHEN kind = N'فاتورة بيع' THEN 1 ELSE 0 END) AS invoices,
+        ISNULL(SUM(CASE WHEN kind = N'فاتورة بيع' THEN total ELSE 0 END), 0) AS total,
+        ISNULL(SUM(CASE WHEN kind = N'تحصيل' THEN total ELSE 0 END), 0) AS collected,
+        ISNULL(SUM(CASE WHEN kind = N'صرف' THEN total ELSE 0 END), 0) AS refunded,
+        ISNULL(SUM(CASE WHEN kind = N'مرتجع بيع' THEN total ELSE 0 END), 0) AS returns,
+        ISNULL(SUM(CASE WHEN kind = N'فاتورة بيع' THEN due ELSE 0 END), 0) AS due`
+      : `SUM(CASE WHEN kind = N'فاتورة شراء' THEN 1 ELSE 0 END) AS invoices,
+        ISNULL(SUM(CASE WHEN kind = N'فاتورة شراء' THEN total ELSE 0 END), 0) AS total,
+        ISNULL(SUM(CASE WHEN kind = N'سداد' THEN total ELSE 0 END), 0) AS paid,
+        ISNULL(SUM(CASE WHEN kind = N'مرتجع شراء' THEN total ELSE 0 END), 0) AS returns,
+        ISNULL(SUM(CASE WHEN kind = N'فاتورة شراء' THEN due ELSE 0 END), 0) AS due`;
+  const pageColumns = type === 'productMove'
+    ? 'kind, docId, no, date, party, storeName, qtyIn, qtyOut, price, total, openAs'
+    : 'kind, docId, no, date, total, paid, due, note, openAs';
+  return {
+    summarySql: `WITH moves AS (${moves}), filtered AS (SELECT * FROM moves WHERE ${filteredWhere}) SELECT ${summarySelect} FROM filtered`,
+    pageSql: `WITH moves AS (${moves}), filtered AS (SELECT * FROM moves WHERE ${filteredWhere}), numbered AS (
+      SELECT ${pageColumns}, ROW_NUMBER() OVER (ORDER BY date DESC, no DESC) AS rn, COUNT(*) OVER () AS totalRows
+      FROM filtered
+    ) SELECT ${pageColumns}, totalRows FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
+  };
+}
+
 app.get('/api/reports', requireAuth, async (req, res) => {
   try {
     const type = String(req.query.type || 'sales');
-    const allowed = ['sales', 'purchases', 'clients', 'suppliers', 'products', 'stock'];
+    const allowed = ['sales', 'purchases', 'clients', 'suppliers', 'products', 'stock', 'productMove', 'clientHistory', 'supplierHistory'];
     if (!allowed.includes(type)) return res.status(400).json({ error: 'التقرير غير معروف' });
     const { page, pageSize, start, end } = paging(req);
     const { from, to } = reportRange(req.query);
+    const partyTypes = ['productMove', 'clientHistory', 'supplierHistory'];
+    const partyId = Number(req.query.partyId || 0);
+    if (partyTypes.includes(type) && !(partyId > 0)) {
+      return res.json({
+        type, from, to, needsParty: true, party: null, storeScoped: false,
+        page, pageSize, total: 0, summary: {}, rows: []
+      });
+    }
     const q = String(req.query.q || '').trim().slice(0, 80);
     const storeId = Number(req.query.storeId || 0);
     const filters = [
@@ -585,6 +897,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
       { name: 'q', type: sql.NVarChar(80), value: q },
       { name: 'like', type: sql.NVarChar(90), value: likeOf(q) },
       { name: 'storeId', type: sql.Int, value: Number.isFinite(storeId) ? storeId : 0 },
+      { name: 'partyId', type: sql.Numeric(18, 0), value: Number.isFinite(partyId) && partyId > 0 ? partyId : 0 },
       { name: 'start', type: sql.Int, value: start },
       { name: 'end', type: sql.Int, value: end }
     ];
@@ -718,6 +1031,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
             INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
             INNER JOIN tblProducts p ON p.ProductId = d.ProductID
             WHERE si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
+              AND (@storeId = 0 OR d.StoreID = @storeId)
               AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like)
             GROUP BY p.ProductId
           ) lines`,
@@ -733,6 +1047,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
             INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
             INNER JOIN tblProducts p ON p.ProductId = d.ProductID
             WHERE si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
+              AND (@storeId = 0 OR d.StoreID = @storeId)
               AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like)
             GROUP BY p.ProductId, p.ProductCode, p.ProductName
           ),
@@ -774,7 +1089,77 @@ app.get('/api/reports', requireAuth, async (req, res) => {
           FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
       }
     };
-    const spec = specs[type];
+    const scopedStore = Number.isFinite(storeId) && storeId > 0;
+    const storeSales = `
+      WITH scoped AS (
+        SELECT
+          si.SellingInvoiceID AS id,
+          si.SellingInvoiceNo AS no,
+          si.SellingInvoiceDate AS date,
+          ISNULL(c.ClientName, N'') AS name,
+          SUM(ISNULL(d.TotalPrice, 0)) AS total,
+          MAX(ISNULL(si.TotalCollectedAmount, 0)) AS paid,
+          MAX(ISNULL(si.NotCollectedAmount, 0)) AS due
+        FROM tblSellingInvoicesDetails d
+        INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
+        LEFT JOIN tblClients c ON c.ClientId = si.ClientID
+        WHERE d.StoreID = @storeId
+          AND si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
+          AND (@q = N'' OR CAST(si.SellingInvoiceNo AS nvarchar(40)) LIKE @like OR c.ClientName LIKE @like)
+        GROUP BY si.SellingInvoiceID, si.SellingInvoiceNo, si.SellingInvoiceDate, c.ClientName
+      )`;
+    const storePurchases = `
+      WITH scoped AS (
+        SELECT
+          pi.PurchaseInvoiceID AS id,
+          pi.PurchaseInvoiceNo AS no,
+          pi.PurchaseInvoiceDate AS date,
+          ISNULL(s.SupplierName, N'') AS name,
+          SUM(ISNULL(d.TotalPricePerProduct, 0)) AS total,
+          MAX(ISNULL(pi.TotalPaiedAmount, 0)) AS paid,
+          MAX(ISNULL(pi.NotPaiedAmount, 0)) AS due
+        FROM tblPurchaseInvoicesDetails d
+        INNER JOIN tblPurchaseInvoice pi ON pi.PurchaseInvoiceID = d.PurchaseInvoiceID
+        LEFT JOIN tblSuppliers s ON s.SupplierID = pi.SupplierID
+        WHERE d.StoreID = @storeId
+          AND pi.PurchaseInvoiceDate ${period} pi.PurchaseInvoiceDate ${periodEnd}
+          AND (@q = N'' OR CAST(pi.PurchaseInvoiceNo AS nvarchar(40)) LIKE @like OR s.SupplierName LIKE @like)
+        GROUP BY pi.PurchaseInvoiceID, pi.PurchaseInvoiceNo, pi.PurchaseInvoiceDate, s.SupplierName
+      )`;
+    let party = null;
+    let spec = partyTypes.includes(type) ? null : specs[type];
+    if (scopedStore && type === 'sales') {
+      spec = {
+        summarySql: `${storeSales} SELECT COUNT(*) AS invoices, ISNULL(SUM(total), 0) AS total, ISNULL(SUM(paid), 0) AS paid, ISNULL(SUM(due), 0) AS due FROM scoped`,
+        pageSql: `${storeSales}, numbered AS (
+          SELECT id, no, date, name, total, paid, due,
+            ROW_NUMBER() OVER (ORDER BY date DESC, id DESC) AS rn,
+            COUNT(*) OVER () AS totalRows
+          FROM scoped
+        ) SELECT id, no, date, name, total, paid, due, totalRows FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
+      };
+    }
+    if (scopedStore && type === 'purchases') {
+      spec = {
+        summarySql: `${storePurchases} SELECT COUNT(*) AS invoices, ISNULL(SUM(total), 0) AS total, ISNULL(SUM(paid), 0) AS paid, ISNULL(SUM(due), 0) AS due FROM scoped`,
+        pageSql: `${storePurchases}, numbered AS (
+          SELECT id, no, date, name, total, paid, due,
+            ROW_NUMBER() OVER (ORDER BY date DESC, id DESC) AS rn,
+            COUNT(*) OVER () AS totalRows
+          FROM scoped
+        ) SELECT id, no, date, name, total, paid, due, totalRows FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
+      };
+    }
+    if (partyTypes.includes(type)) {
+      const lookup = {
+        productMove: `SELECT ProductId AS id, ISNULL(ProductCode, '') AS code, ISNULL(ProductName, N'') AS name, ISNULL(ProductStock, 0) AS stock, ISNULL(UnitName, N'') AS unitName FROM tblProducts WHERE ProductId = @partyId`,
+        clientHistory: `SELECT ClientId AS id, ISNULL(ClientName, N'') AS name, ISNULL(PhoneNo, N'') AS phone, ISNULL(MobilNo, N'') AS mobile FROM tblClients WHERE ClientId = @partyId`,
+        supplierHistory: `SELECT SupplierID AS id, ISNULL(SupplierName, N'') AS name, ISNULL(PhoneNo, N'') AS phone, ISNULL(MobilNo, N'') AS mobile FROM tblSuppliers WHERE SupplierID = @partyId`
+      };
+      party = (await runQuery(lookup[type], filters))[0];
+      if (!party) return res.status(404).json({ error: 'السجل غير موجود' });
+      spec = partyReportSpec(type, period, periodEnd);
+    }
     const [summaryRows, pageRows] = await Promise.all([
       runQuery(spec.summarySql, filters),
       runQuery(spec.pageSql, filters)
@@ -785,6 +1170,9 @@ app.get('/api/reports', requireAuth, async (req, res) => {
       type,
       from,
       to,
+      needsParty: false,
+      party,
+      storeScoped: scopedStore && ['sales', 'purchases', 'products', 'productMove'].includes(type),
       page,
       pageSize,
       total,
@@ -944,6 +1332,17 @@ function roundTo(value, digits) {
   if (!Number.isFinite(n)) return null;
   const factor = 10 ** digits;
   return Math.round(n * factor) / factor;
+}
+
+function paymentAmount(body, total) {
+  const totalAmount = roundTo(total, 4);
+  if (!body || !body.paid) return { amount: 0 };
+  const raw = body.paidAmount;
+  if (raw == null || raw === '') return { amount: totalAmount };
+  const amount = roundTo(raw, 4);
+  if (amount == null || amount < 0) return { error: 'اكتب المبلغ المدفوع' };
+  if (amount > totalAmount + 0.0001) return { error: 'المبلغ المدفوع أكبر من إجمالي الفاتورة' };
+  return { amount };
 }
 
 function readProductBody(body) {
@@ -1286,6 +1685,46 @@ app.get('/api/clients', requireAuth, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'تعذر تحميل العملاء' });
+  }
+});
+
+app.get('/api/clients/:id/sales', requireAuth, async (req, res) => {
+  try {
+    const clientId = Number(req.params.id);
+    if (!Number.isFinite(clientId) || clientId < 0) return res.status(400).json({ error: 'العميل غير موجود' });
+    const { page, pageSize, start, end } = paging(req);
+    const pool = await poolPromise;
+    const client = await pool.request().input('id', sql.Numeric(18, 0), clientId).query(`
+      SELECT ClientId AS id, ISNULL(ClientName, N'') AS name, ISNULL(AccCode, N'') AS accCode
+      FROM tblClients WHERE ClientId = @id
+    `);
+    if (!client.recordset[0]) return res.status(404).json({ error: 'العميل غير موجود' });
+    const data = await queryPage(`
+      WITH numbered AS (
+        SELECT
+          si.SellingInvoiceID AS id,
+          si.SellingInvoiceNo AS no,
+          si.SellingInvoiceDate AS date,
+          ISNULL(si.SellingInvoiceTotalAmount, 0) AS amount,
+          ISNULL(si.TotalCollectedAmount, 0) AS paid,
+          ISNULL(si.NotCollectedAmount, 0) AS due,
+          ISNULL(si.InsertedBy, N'') AS byName,
+          ROW_NUMBER() OVER (ORDER BY si.SellingInvoiceDate DESC, si.SellingInvoiceID DESC) AS rn,
+          COUNT(*) OVER () AS total
+        FROM tblSellingInvoice si
+        WHERE si.ClientID = @clientId
+      )
+      SELECT id, no, date, amount, paid, due, byName, total
+      FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn
+    `, [
+      { name: 'clientId', type: sql.Numeric(18, 0), value: clientId },
+      { name: 'start', type: sql.Int, value: start },
+      { name: 'end', type: sql.Int, value: end }
+    ]);
+    res.json({ page, pageSize, total: data.total, client: client.recordset[0], rows: data.rows });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'تعذر تحميل فواتير العميل' });
   }
 });
 
@@ -1643,11 +2082,9 @@ async function accountByCode(tx, code) {
 app.post('/api/sales', requireAuth, async (req, res) => {
   const clientId = Number(req.body.clientId);
   const storeId = Number(req.body.storeId);
-  const paid = Boolean(req.body.paid);
   const notes = String(req.body.notes || '').slice(0, 250);
   const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
   if (!storeId || !lines.length) return res.status(400).json({ error: 'اختر المخزن وأضف صنفاً واحداً على الأقل' });
-  if (!paid && !clientId) return res.status(400).json({ error: 'فاتورة الآجل تحتاج عميلاً' });
 
   const cleanLines = [];
   for (const line of lines) {
@@ -1661,8 +2098,11 @@ app.post('/api/sales', requireAuth, async (req, res) => {
   }
   const invoiceTotal = Math.round(cleanLines.reduce((sum, line) => sum + line.total, 0) * 10000) / 10000;
   if (!(invoiceTotal > 0)) return res.status(400).json({ error: 'إجمالي الفاتورة لازم يكون أكبر من صفر' });
-  const collected = paid ? invoiceTotal : 0;
-  const due = invoiceTotal - collected;
+  const pay = paymentAmount(req.body, invoiceTotal);
+  if (pay.error) return res.status(400).json({ error: pay.error });
+  const collected = pay.amount;
+  const due = roundTo(invoiceTotal - collected, 4);
+  if (due > 0.0001 && !clientId) return res.status(400).json({ error: 'فاتورة الآجل تحتاج عميلاً' });
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -1907,11 +2347,9 @@ app.post('/api/sales', requireAuth, async (req, res) => {
 app.post('/api/purchases', requireAuth, async (req, res) => {
   const supplierId = Number(req.body.supplierId);
   const storeId = Number(req.body.storeId);
-  const paid = Boolean(req.body.paid);
   const notes = String(req.body.notes || '').slice(0, 250);
   const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
   if (!storeId || !lines.length) return res.status(400).json({ error: 'اختر المخزن وأضف صنفاً واحداً على الأقل' });
-  if (!paid && !supplierId) return res.status(400).json({ error: 'فاتورة الآجل تحتاج مورداً' });
 
   const cleanLines = [];
   for (const line of lines) {
@@ -1925,7 +2363,10 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
   }
   const invoiceTotal = Math.round(cleanLines.reduce((sum, line) => sum + line.total, 0) * 10000) / 10000;
   if (!(invoiceTotal > 0)) return res.status(400).json({ error: 'إجمالي الفاتورة لازم يكون أكبر من صفر' });
-  const collected = paid ? invoiceTotal : 0;
+  const pay = paymentAmount(req.body, invoiceTotal);
+  if (pay.error) return res.status(400).json({ error: pay.error });
+  const collected = pay.amount;
+  if (roundTo(invoiceTotal - collected, 4) > 0.0001 && !supplierId) return res.status(400).json({ error: 'فاتورة الآجل تحتاج مورداً' });
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -2187,10 +2628,18 @@ function editLines(bodyLines) {
   return { lines, total };
 }
 
-function nextPaid(oldPaid, oldTotal, newTotal, wantPaid) {
-  const paid = Number(oldPaid) || 0;
+function nextPaid(oldPaid, oldTotal, newTotal, body) {
+  const paidBefore = Number(oldPaid) || 0;
   const previous = Number(oldTotal) || 0;
-  const amount = wantPaid ? newTotal : (paid > 0.0001 && paid + 0.0001 < previous ? roundTo(paid, 4) : 0);
+  let amount;
+  if (body && body.paid) {
+    const raw = body.paidAmount;
+    amount = raw == null || raw === '' ? roundTo(newTotal, 4) : roundTo(raw, 4);
+    if (amount == null || amount < 0) throw new Error('اكتب المبلغ المدفوع');
+    if (amount > newTotal + 0.0001) throw new Error('المبلغ المدفوع أكبر من إجمالي الفاتورة');
+  } else {
+    amount = paidBefore > 0.0001 && paidBefore + 0.0001 < previous ? roundTo(paidBefore, 4) : 0;
+  }
   if (newTotal + 0.0001 < amount) throw new Error('الإجمالي الجديد أقل من المبلغ المدفوع');
   return amount;
 }
@@ -2260,20 +2709,22 @@ async function alignInventoryGuid(tx, detailTable, line, invoiceNo, transactionI
     { name: 'party', type: sql.Numeric(18, 0), value: Number(partyId) || 0 }
   ];
   const attempts = [
-    { qty: true, party: true },
-    { qty: true, party: false },
-    { qty: false, party: true, single: true },
-    { qty: false, party: false, single: true }
+    { qty: true, party: true, store: true },
+    { qty: true, party: false, store: true },
+    { qty: false, party: true, store: true, single: true },
+    { qty: false, party: false, store: true, single: true },
+    { qty: true, party: false, store: false },
+    { qty: false, party: false, store: false, single: true }
   ];
   for (const attempt of attempts) {
     const filters = [
       'i.InvoiceNo = @no',
       'i.ProductID = @pid',
-      'i.StoreID = @store',
       'i.TransactionID = @trx',
       'NOT EXISTS (SELECT 1 FROM tblSellingInvoicesDetails s WHERE s.RowGuid = i.RowGUID AND s.id <> @lineId)',
       'NOT EXISTS (SELECT 1 FROM tblPurchaseInvoicesDetails p WHERE p.RowGuid = i.RowGUID AND p.Id <> @lineId)'
     ];
+    if (attempt.store) filters.push('i.StoreID = @store');
     if (attempt.qty) filters.push(`i.${qtyColumn} = @qty`);
     if (attempt.party) filters.push(`ISNULL(i.${partyColumn}, 0) = @party`);
     const found = await txQuery(tx, `
@@ -2286,13 +2737,16 @@ async function alignInventoryGuid(tx, detailTable, line, invoiceNo, transactionI
     if (attempt.single && found.recordset.length !== 1) continue;
     const inventoryId = Number(found.recordset[0].id);
     const updated = await txQuery(tx, `
+      UPDATE tblInventory SET RowGUID = ISNULL(RowGUID, @guid) WHERE ID = @invId AND TransactionID = @trx;
       UPDATE d SET d.RowGuid = i.RowGUID
       FROM ${detailTable} d
-      INNER JOIN tblInventory i ON i.ID = @invId
-      WHERE d.id = @lineId
+      INNER JOIN tblInventory i ON i.ID = @invId AND i.TransactionID = @trx
+      WHERE d.id = @lineId AND i.RowGUID IS NOT NULL
     `, [
       { name: 'invId', type: sql.Numeric(18, 0), value: inventoryId },
-      { name: 'lineId', type: sql.Numeric(18, 0), value: line.lineId }
+      { name: 'lineId', type: sql.Numeric(18, 0), value: line.lineId },
+      { name: 'trx', type: sql.Int, value: transactionId },
+      { name: 'guid', type: sql.UniqueIdentifier, value: crypto.randomUUID() }
     ]);
     assertOne(updated, 'تعذر ربط أحد الأصناف بحركة المخزون');
     return inventoryId;
@@ -2425,7 +2879,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
     if (payments.recordset.length > 1) throw new Error('الفاتورة لها أكثر من حركة تحصيل');
     const payment = payments.recordset[0] || null;
     if (payment && Number(payment.discount) > 0.0001) throw new Error('الفاتورة فيها خصم على التحصيل');
-    const paid = nextPaid(header.paid, header.total, parsed.total, Boolean(req.body.paid));
+    const paid = nextPaid(header.paid, header.total, parsed.total, req.body);
     if (!payment && Number(header.paid) > 0.0001 && !moneyClose(paid, header.paid)) {
       throw new Error('المبلغ المحصّل غير مربوط بحركة خزنة، لا يمكن تغيير حالة السداد');
     }
@@ -2434,6 +2888,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
       : { ClientId: 0, name: 'عميل نقدي', accCode: '' };
     if (clientId && !client) throw new Error('العميل غير موجود');
     const due = roundTo(parsed.total - paid, 4);
+    if (due > 0.0001 && !clientId) throw new Error('فاتورة الآجل تحتاج عميلاً');
     if (due > 0.0001 && clientId && !client.accCode) throw new Error('العميل ليس له كود حساب');
     const salesAccount = await accountByCode(tx, '12210301');
     const cashClearing = await accountByCode(tx, '1221010001');
@@ -2696,7 +3151,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
     if (payments.recordset.length > 1) throw new Error('الفاتورة لها أكثر من حركة سداد');
     const payment = payments.recordset[0] || null;
     if (payment && Number(payment.discount) > 0.0001) throw new Error('الفاتورة فيها خصم على السداد');
-    const paid = nextPaid(header.paid, header.total, parsed.total, Boolean(req.body.paid));
+    const paid = nextPaid(header.paid, header.total, parsed.total, req.body);
     if (!payment && Number(header.paid) > 0.0001 && !moneyClose(paid, header.paid)) {
       throw new Error('المبلغ المدفوع غير مربوط بحركة خزنة، لا يمكن تغيير حالة السداد');
     }
@@ -2704,6 +3159,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
       ? (await txQuery(tx, `SELECT SupplierID, ISNULL(SupplierName, N'') AS name, ISNULL(AccCode, N'') AS accCode FROM tblSuppliers WHERE SupplierID = @id`, [{ name: 'id', type: sql.Numeric(18, 0), value: supplierId }])).recordset[0]
       : { SupplierID: 0, name: 'مشتريات نقدية', accCode: '2423' };
     if (supplierId && !supplier) throw new Error('المورد غير موجود');
+    if (roundTo(parsed.total - paid, 4) > 0.0001 && !supplier.SupplierID) throw new Error('فاتورة الآجل تحتاج مورداً');
     const counterCode = supplier.SupplierID ? supplier.accCode : '2423';
     if (!counterCode) throw new Error('المورد ليس له كود حساب');
     const purchasesAccount = await accountByCode(tx, '2424');

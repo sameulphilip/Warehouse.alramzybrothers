@@ -19,21 +19,21 @@ const icon = (name) => `<span class="ico">${icons[name] || ''}</span>`;
 
 const sections = [
   { id: 'dashboard', label: 'لوحة التحكم', title: 'لوحة التحكم', subtitle: 'ملخص حي من قاعدة بيانات الفروع' },
-  { id: 'reports', label: 'التقارير', title: 'التقارير', subtitle: 'مبيعات ومشتريات ومديونيات وحركة الأصناف وأرصدة المخازن' },
+  { id: 'reports', label: 'التقارير', title: 'التقارير', subtitle: 'مبيعات ومشتريات، وحركة صنف، وتاريخ عميل أو مورد' },
   { id: 'stock', label: 'المخزون', title: 'المخزون حسب المخزن', subtitle: 'الرصيد الحالي لكل منتج داخل كل مخزن' },
   { id: 'products', label: 'المنتجات', title: 'المنتجات', subtitle: 'تعديل بيانات المنتج وسعر البيع، أو إضافة منتج جديد' },
   { id: 'newSale', label: 'فاتورة بيع جديدة', title: 'فاتورة بيع جديدة', subtitle: 'تسجّل الفاتورة والمخزون والقيد مثل البرنامج الأصلي' },
   { id: 'sales', label: 'فواتير البيع', title: 'فواتير البيع', subtitle: 'اضغط الفاتورة لعرض الأصناف' },
   { id: 'newPurchase', label: 'فاتورة شراء جديدة', title: 'فاتورة شراء جديدة', subtitle: 'تسجّل الفاتورة والمخزون والقيد مثل البرنامج الأصلي' },
   { id: 'purchases', label: 'فواتير الشراء', title: 'فواتير الشراء', subtitle: 'اضغط الفاتورة لعرض الأصناف' },
-  { id: 'clients', label: 'العملاء', title: 'العملاء', subtitle: 'بيانات العملاء وأرقام التواصل' },
+  { id: 'clients', label: 'العملاء', title: 'العملاء', subtitle: 'اضغط العميل لعرض كل فواتير البيع' },
   { id: 'suppliers', label: 'الموردين', title: 'الموردين', subtitle: 'اضغط المورد لعرض كل فواتير الشراء' },
   { id: 'stores', label: 'المخازن', title: 'المخازن', subtitle: 'فروع ومخازن الشركة' },
   { id: 'activity', label: 'سجل الحركات', title: 'سجل الحركات', subtitle: 'كل حساب واللي عمله: فواتير، أسعار، وبحث' },
   { id: 'accounts', label: 'إدارة الحسابات', title: 'إدارة الحسابات', subtitle: 'حسابات الدخول وصلاحيات المديرين', admin: true }
 ];
 
-const state = { section: 'dashboard', page: 1, q: '', storeId: '0', stores: [], user: null, range: '1', report: null };
+const state = { section: 'dashboard', page: 1, q: '', storeId: '0', dashStore: '0', stores: [], user: null, range: '1', report: null, readOnly: false };
 
 function visibleSections() {
   return sections.filter((section) => !section.admin || state.user?.role === 'superadmin');
@@ -78,11 +78,29 @@ function showLogin() {
   loginView.classList.remove('hidden');
 }
 
+function applyReadOnly() {
+  document.body.classList.toggle('read-only', Boolean(state.readOnly));
+  let bar = document.getElementById('readOnlyBar');
+  if (!state.readOnly) {
+    if (bar) bar.remove();
+    return;
+  }
+  if (state.section === 'newSale' || state.section === 'newPurchase') state.section = 'dashboard';
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'readOnlyBar';
+    bar.className = 'readonly-bar';
+    bar.textContent = 'وضع العرض فقط. النسخة الخارجية لا تقبل فواتير أو تعديلات.';
+    document.querySelector('.workspace').insertBefore(bar, document.getElementById('content'));
+  }
+}
+
 function showApp(user) {
   loginView.classList.add('hidden');
   appView.classList.remove('hidden');
   state.user = user;
   document.getElementById('who').textContent = user.name || user.username;
+  applyReadOnly();
   if (!visibleSections().some((section) => section.id === state.section)) state.section = 'dashboard';
   renderNav();
   openSection(state.section);
@@ -111,11 +129,13 @@ function renderNav() {
 function closeMenu() {
   document.querySelector('.side').classList.remove('open');
   document.getElementById('scrim').classList.add('hidden');
+  document.body.classList.remove('menu-open');
 }
 
 function openMenu() {
   document.querySelector('.side').classList.add('open');
   document.getElementById('scrim').classList.remove('hidden');
+  document.body.classList.add('menu-open');
 }
 
 function setHeading() {
@@ -125,6 +145,7 @@ function setHeading() {
 }
 
 async function openSection(id) {
+  if (state.readOnly && (id === 'newSale' || id === 'newPurchase')) id = 'dashboard';
   if (!visibleSections().some((section) => section.id === id)) id = 'dashboard';
   state.section = id;
   renderNav();
@@ -132,7 +153,10 @@ async function openSection(id) {
   drawer.classList.add('hidden');
   content.innerHTML = '<div class="skeleton"><span></span><span></span><span></span><span></span></div>';
   try {
-    if (id === 'dashboard') return renderDashboard(await api(`/api/dashboard?range=${state.range || '1'}`));
+    if (id === 'dashboard') {
+      if (!state.stores.length) state.stores = (await api('/api/stores')).stores;
+      return renderDashboard(await api(`/api/dashboard?range=${state.range || '1'}&storeId=${state.dashStore || '0'}`));
+    }
     if (id === 'reports') {
       if (!state.stores.length) state.stores = (await api('/api/stores')).stores;
       return renderReports(await api(reportUrl()));
@@ -152,8 +176,8 @@ async function openSection(id) {
           { label: 'الحساب', width: '0.8fr' }
         ],
         data.rows.map((row) => ({
-          clickable: id === 'suppliers',
-          attrs: id === 'suppliers' ? `data-id="${row.id}" data-name="${esc(row.name)}" data-acc="${esc(row.accCode)}"` : '',
+          clickable: true,
+          attrs: `data-id="${row.id}" data-name="${esc(row.name)}" data-acc="${esc(row.accCode)}"`,
           cells: [esc(row.name), esc(row.phone), esc(row.mobile), esc(row.address), esc(row.accCode)]
         }))
       ));
@@ -217,7 +241,7 @@ function bindPager(total, reload) {
   document.getElementById('next').onclick = () => { if (state.page < pages) { state.page += 1; reload(); } };
 }
 
-const numericLabels = new Set(['الإجمالي', 'المتبقي', 'المدفوع', 'سعر البيع', 'سعر الشراء', 'الرصيد', 'حد الطلب', 'الكمية', 'السعر', 'المرتجع', 'كمية المرتجع', 'الفواتير']);
+const numericLabels = new Set(['الإجمالي', 'المتبقي', 'المدفوع', 'سعر البيع', 'سعر الشراء', 'الرصيد', 'حد الطلب', 'الكمية', 'السعر', 'المرتجع', 'كمية المرتجع', 'الفواتير', 'داخل', 'خارج']);
 
 function grid(columns, rows) {
   const head = columns.map((column) => `<span class="${numericLabels.has(column.label) ? 'num' : ''}">${column.label}</span>`).join('');
@@ -250,7 +274,9 @@ function ensureReport() {
       type: 'sales',
       from: isoDate(new Date(today.getFullYear(), today.getMonth(), 1)),
       to: isoDate(today),
-      storeId: '0'
+      storeId: '0',
+      partyId: 0,
+      partyName: ''
     };
   }
   return state.report;
@@ -263,6 +289,7 @@ function reportUrl() {
     from: report.from,
     to: report.to,
     storeId: report.storeId || '0',
+    partyId: String(report.partyId || 0),
     q: state.q,
     page: String(state.page),
     pageSize: '30'
@@ -274,24 +301,44 @@ const reportCatalog = [
   ['sales', 'المبيعات', true],
   ['purchases', 'المشتريات', true],
   ['products', 'حركة الأصناف', true],
+  ['productMove', 'حركة منتج', true],
+  ['clientHistory', 'تاريخ عميل', true],
+  ['supplierHistory', 'تاريخ مورد', true],
   ['clients', 'مديونية العملاء', false],
   ['suppliers', 'مديونية الموردين', false],
   ['stock', 'أرصدة المخزون', false]
 ];
 
+const partyReportMeta = {
+  productMove: { label: 'المنتج', path: '/api/products', hint: 'اسم الصنف أو الكود', empty: 'ابحث عن الصنف ثم اختَره لعرض كل ما حدث له.' },
+  clientHistory: { label: 'العميل', path: '/api/clients', hint: 'اسم العميل', empty: 'ابحث عن العميل ثم اختَره لعرض كل التعاملات معه.' },
+  supplierHistory: { label: 'المورد', path: '/api/suppliers', hint: 'اسم المورد', empty: 'ابحث عن المورد ثم اختَره لعرض كل التعاملات معه.' }
+};
+
 function renderReports(data) {
   const report = ensureReport();
   report.from = data.from;
   report.to = data.to;
-  const dated = ['sales', 'purchases', 'products'].includes(data.type);
+  if (data.party) {
+    report.partyId = Number(data.party.id);
+    report.partyName = data.party.name || report.partyName;
+  }
+  const partyMeta = partyReportMeta[data.type] || null;
+  const dated = ['sales', 'purchases', 'products', 'productMove', 'clientHistory', 'supplierHistory'].includes(data.type);
   const cards = {
-    sales: [
+    sales: data.storeScoped ? [
+      ['فواتير المخزن', num(data.summary.invoices)],
+      ['مبيعات المخزن', money(data.summary.total)]
+    ] : [
       ['عدد الفواتير', num(data.summary.invoices)],
       ['إجمالي المبيعات', money(data.summary.total)],
       ['المحصّل', money(data.summary.paid)],
       ['المتبقي', money(data.summary.due)]
     ],
-    purchases: [
+    purchases: data.storeScoped ? [
+      ['فواتير المخزن', num(data.summary.invoices)],
+      ['مشتريات المخزن', money(data.summary.total)]
+    ] : [
       ['عدد الفواتير', num(data.summary.invoices)],
       ['إجمالي المشتريات', money(data.summary.total)],
       ['المسدّد', money(data.summary.paid)],
@@ -313,6 +360,30 @@ function renderReports(data) {
     stock: [
       ['سطور الرصيد', num(data.summary.rows)],
       ['مجموع الكميات', num(data.summary.qty)]
+    ],
+    productMove: [
+      ['الحركات', num(data.summary.moves)],
+      ['كمية البيع', num(data.summary.sold)],
+      ['كمية الشراء', num(data.summary.bought)],
+      ['مرتجع بيع', num(data.summary.saleReturns)],
+      ['مرتجع شراء', num(data.summary.purchaseReturns)],
+      ['قيمة البيع', money(data.summary.salesTotal)],
+      ['قيمة الشراء', money(data.summary.purchaseTotal)]
+    ],
+    clientHistory: [
+      ['فواتير البيع', num(data.summary.invoices)],
+      ['إجمالي البيع', money(data.summary.total)],
+      ['التحصيل', money(data.summary.collected)],
+      ['الصرف', money(data.summary.refunded)],
+      ['المرتجعات', money(data.summary.returns)],
+      ['المتبقي', money(data.summary.due)]
+    ],
+    supplierHistory: [
+      ['فواتير الشراء', num(data.summary.invoices)],
+      ['إجمالي الشراء', money(data.summary.total)],
+      ['السداد', money(data.summary.paid)],
+      ['المرتجعات', money(data.summary.returns)],
+      ['المتبقي', money(data.summary.due)]
     ]
   }[data.type] || [];
   const columns = {
@@ -353,6 +424,34 @@ function renderReports(data) {
       { label: 'الكود', width: '0.7fr' },
       { label: 'الصنف', width: '1.6fr' },
       { label: 'الرصيد', width: '0.6fr' }
+    ],
+    productMove: [
+      { label: 'التاريخ', width: '0.8fr' },
+      { label: 'الحركة', width: '0.7fr' },
+      { label: 'الطرف', width: '1.2fr' },
+      { label: 'المخزن', width: '0.8fr' },
+      { label: 'داخل', width: '0.45fr' },
+      { label: 'خارج', width: '0.45fr' },
+      { label: 'السعر', width: '0.6fr' },
+      { label: 'الإجمالي', width: '0.7fr' }
+    ],
+    clientHistory: [
+      { label: 'التاريخ', width: '0.75fr' },
+      { label: 'الحركة', width: '0.7fr' },
+      { label: 'الرقم', width: '0.5fr' },
+      { label: 'الإجمالي', width: '0.7fr' },
+      { label: 'المدفوع', width: '0.65fr' },
+      { label: 'المتبقي', width: '0.65fr' },
+      { label: 'البيان', width: '1.3fr' }
+    ],
+    supplierHistory: [
+      { label: 'التاريخ', width: '0.75fr' },
+      { label: 'الحركة', width: '0.7fr' },
+      { label: 'الرقم', width: '0.5fr' },
+      { label: 'الإجمالي', width: '0.7fr' },
+      { label: 'المدفوع', width: '0.65fr' },
+      { label: 'المتبقي', width: '0.65fr' },
+      { label: 'البيان', width: '1.3fr' }
     ]
   }[data.type];
   const rows = data.rows.map((row) => {
@@ -364,6 +463,21 @@ function renderReports(data) {
         classes: ['', '', '', '', '', Number(row.due) > 0 ? 'due' : 'ok']
       };
     }
+    if (data.type === 'productMove') {
+      return {
+        clickable: Boolean(row.openAs),
+        attrs: `data-id="${row.docId}" data-open="${esc(row.openAs || '')}"`,
+        cells: [dateText(row.date), esc(row.kind), esc(row.party) || '—', esc(row.storeName), num(row.qtyIn), num(row.qtyOut), money(row.price), money(row.total)]
+      };
+    }
+    if (data.type === 'clientHistory' || data.type === 'supplierHistory') {
+      return {
+        clickable: Boolean(row.openAs),
+        attrs: `data-id="${row.docId}" data-open="${esc(row.openAs || '')}"`,
+        cells: [dateText(row.date), esc(row.kind), row.no, money(row.total), money(row.paid), money(row.due), esc(row.note)],
+        classes: ['', '', '', '', '', Number(row.due) > 0 ? 'due' : '', '']
+      };
+    }
     if (data.type === 'products') return { cells: [esc(row.code), esc(row.name), num(row.qty), money(row.total)] };
     if (data.type === 'clients' || data.type === 'suppliers') {
       return { cells: [esc(row.name), num(row.invoices), money(row.due)], classes: ['', '', 'due'] };
@@ -371,24 +485,48 @@ function renderReports(data) {
     return { cells: [esc(row.storeName), esc(row.code), esc(row.name), num(row.qty)], classes: ['', '', '', Number(row.qty) < 0 ? 'neg' : ''] };
   });
   const title = reportCatalog.find((item) => item[0] === data.type)?.[1] || 'تقرير';
+  const heading = partyMeta && report.partyName ? `${title} — ${report.partyName}` : title;
   const longDate = (value) => {
     const date = new Date(`${String(value).slice(0, 10)}T12:00:00`);
     return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString('ar-EG', { day: 'numeric', month: 'long', year: 'numeric' });
   };
-  const periodText = dated ? `من ${longDate(data.from)} إلى ${longDate(data.to)}` : 'رصيد حالي حتى تاريخ الطباعة';
+  const periodText = !dated
+    ? 'رصيد حالي حتى تاريخ الطباعة'
+    : String(data.from) === '2000-01-01'
+      ? `حتى ${longDate(data.to)}`
+      : `من ${longDate(data.from)} إلى ${longDate(data.to)}`;
   const startRow = data.total ? ((data.page || state.page) - 1) * (data.pageSize || 30) + 1 : 0;
   const endRow = Math.min((data.page || state.page) * (data.pageSize || 30), data.total);
-  const storeName = data.type === 'stock'
-    ? (state.stores.find((store) => String(store.id) === String(report.storeId))?.name || 'كل المخازن')
-    : '';
+  const pickedStore = state.stores.find((store) => String(store.id) === String(report.storeId));
+  const storeName = pickedStore && String(report.storeId) !== '0' ? pickedStore.name : '';
   const printedAt = new Date().toLocaleString('ar-EG', { dateStyle: 'medium', timeStyle: 'short' });
+  const shownCards = data.needsParty ? [] : cards;
+  const partyBits = [];
+  if (partyMeta && report.partyName) {
+    partyBits.push(report.partyName);
+    if (data.party?.code) partyBits.push(data.party.code);
+    if (data.type === 'productMove' && data.party) partyBits.push(`الرصيد ${num(data.party.stock)} ${data.party.unitName || ''}`.trim());
+    if (data.party?.phone || data.party?.mobile) partyBits.push([data.party.phone, data.party.mobile].filter(Boolean).join(' · '));
+  }
+  const note = partyMeta && data.needsParty
+    ? partyMeta.empty
+    : data.type === 'productMove'
+      ? `بيع وشراء ومرتجع وجرد وتحويل${storeName ? ` في مخزن ${storeName}` : ''}. الرصيد أعلى الصفحة حالي، والجدول حسب الفترة.`
+      : data.type === 'clientHistory'
+        ? 'فواتير البيع والمرتجعات والتحصيل والصرف. اضغط فاتورة البيع لفتحها.'
+        : data.type === 'supplierHistory'
+          ? 'فواتير الشراء والمرتجعات والسداد. اضغط فاتورة الشراء لفتحها.'
+          : dated
+            ? `الأرقام محسوبة على الفترة المحددة${storeName ? ` لمخزن ${storeName}` : ''}، وصفحة الجدول جزء من نفس الفترة.`
+            : 'هذا التقرير رصيد حالي، وتاريخ الفترة لا يغيّره.';
   const printHead = columns.map((column) => `<th class="${numericLabels.has(column.label) ? 'num' : ''}">${column.label}</th>`).join('');
   const printBody = rows.length
     ? rows.map((row) => `<tr>${row.cells.map((cell, index) => `<td class="${numericLabels.has(columns[index].label) ? 'num' : ''}">${cell}</td>`).join('')}</tr>`).join('')
-    : `<tr><td class="print-empty" colspan="${columns.length}">لا توجد نتائج</td></tr>`;
+    : `<tr><td class="print-empty" colspan="${columns.length}">${data.needsParty ? 'اختَر السجل أولاً' : 'لا توجد نتائج'}</td></tr>`;
   const storeOptions = ['<option value="0">كل المخازن</option>'].concat(state.stores.map((store) =>
     `<option value="${store.id}" ${String(store.id) === String(report.storeId) ? 'selected' : ''}>${esc(store.name)}</option>`
   )).join('');
+  const storeFilter = ['sales', 'purchases', 'products', 'stock', 'productMove'].includes(data.type);
   content.innerHTML = `
     <article class="print-sheet">
       <header class="print-brand">
@@ -399,19 +537,20 @@ function renderReports(data) {
           <span>إدارة فروع الرمزي</span>
         </div>
         <div class="print-title">
-          <h1>تقرير ${esc(title)}</h1>
+          <h1>تقرير ${esc(heading)}</h1>
           <p>${esc(periodText)}</p>
         </div>
       </header>
       <div class="print-facts">
         <div><span>الفترة</span><strong>${esc(periodText)}</strong></div>
         <div><span>السجلات</span><strong>${data.total ? `${num(startRow)}–${num(endRow)} من ${num(data.total)}` : 'لا توجد سجلات'}</strong></div>
+        ${partyBits.length ? `<div><span>${esc(partyMeta.label)}</span><strong>${esc(partyBits.join(' · '))}</strong></div>` : ''}
         ${storeName ? `<div><span>المخزن</span><strong>${esc(storeName)}</strong></div>` : ''}
         ${state.q ? `<div><span>البحث</span><strong>${esc(state.q)}</strong></div>` : ''}
         <div><span>طُبع بواسطة</span><strong>${esc(state.user?.name || state.user?.username || '')}</strong></div>
         <div><span>تاريخ الطباعة</span><strong>${esc(printedAt)}</strong></div>
       </div>
-      <div class="print-totals">${cards.map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join('')}</div>
+      <div class="print-totals">${shownCards.map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join('')}</div>
       <table>
         <thead><tr>${printHead}</tr></thead>
         <tbody>${printBody}</tbody>
@@ -421,24 +560,42 @@ function renderReports(data) {
     <div class="range report-types">${reportCatalog.map(([id, label]) =>
       `<button type="button" data-report="${id}" class="${data.type === id ? 'active' : ''}">${label}</button>`
     ).join('')}</div>
+    ${partyMeta ? `<div class="party-box">
+      ${partyBits.length ? `<div class="party-picked"><span>${esc(partyBits.join(' · '))}</span><button type="button" id="clearParty">تغيير</button></div>` : ''}
+      <label>${esc(partyMeta.label)}<input id="partyQ" placeholder="${esc(partyMeta.hint)}" autocomplete="off"></label>
+      <div id="partyHits" class="party-hits"></div>
+    </div>` : ''}
     <div class="report-filters">
       ${dated ? `<label>من<input id="reportFrom" type="date" value="${esc(report.from)}"></label>
         <label>إلى<input id="reportTo" type="date" value="${esc(report.to)}"></label>` : ''}
-      ${data.type === 'stock' ? `<label>المخزن<select id="reportStore">${storeOptions}</select></label>` : ''}
-      <label class="report-search">بحث<input id="q" value="${esc(state.q)}" placeholder="اسم أو رقم"></label>
+      ${storeFilter ? `<label>المخزن<select id="reportStore">${storeOptions}</select></label>` : ''}
+      <label class="report-search">بحث<input id="q" value="${esc(state.q)}" placeholder="${partyMeta ? 'رقم أو نوع الحركة' : 'اسم أو رقم'}"></label>
       <button id="go" type="button">عرض</button>
       <button id="printReport" class="ghost" type="button">طباعة</button>
     </div>
-    <p class="panel-note">${dated ? 'الأرقام محسوبة على الفترة المحددة، وصفحة الجدول جزء من نفس الفترة.' : 'هذا التقرير رصيد حالي، وتاريخ الفترة لا يغيّره.'}</p>
-    <div class="kpis report-kpis">${cards.map(([label, value]) =>
+    <p class="panel-note">${esc(note)}</p>
+    ${shownCards.length ? `<div class="kpis report-kpis">${shownCards.map(([label, value]) =>
       `<article class="kpi"><span>${label}</span><strong>${value}</strong></article>`
-    ).join('')}</div>
-    ${grid(columns, rows)}
-    ${pager(data.total)}`;
+    ).join('')}</div>` : ''}
+    ${data.needsParty ? '<div class="empty">اختَر من نتائج البحث</div>' : `${grid(columns, rows)}${pager(data.total)}`}`;
   const reload = () => openSection('reports');
   content.querySelectorAll('[data-report]').forEach((button) => {
     button.onclick = () => {
-      report.type = button.dataset.report;
+      const next = button.dataset.report;
+      const partyIds = Object.keys(partyReportMeta);
+      const entering = partyIds.includes(next) && !partyIds.includes(report.type);
+      const leaving = !partyIds.includes(next) && partyIds.includes(report.type);
+      if (next !== report.type) {
+        report.partyId = 0;
+        report.partyName = '';
+      }
+      if (entering) report.from = '2000-01-01';
+      if (leaving) {
+        const today = new Date();
+        report.from = isoDate(new Date(today.getFullYear(), today.getMonth(), 1));
+        report.to = isoDate(today);
+      }
+      report.type = next;
       state.page = 1;
       state.q = '';
       reload();
@@ -449,7 +606,7 @@ function renderReports(data) {
       report.from = document.getElementById('reportFrom').value || report.from;
       report.to = document.getElementById('reportTo').value || report.to;
     }
-    if (data.type === 'stock') report.storeId = document.getElementById('reportStore').value;
+    if (storeFilter) report.storeId = document.getElementById('reportStore').value;
     state.q = document.getElementById('q').value.trim();
     state.page = 1;
     reload();
@@ -457,33 +614,98 @@ function renderReports(data) {
   document.getElementById('q').onkeydown = (event) => { if (event.key === 'Enter') document.getElementById('go').click(); };
   document.getElementById('printReport').onclick = () => {
     const previous = document.title;
-    document.title = `تقرير ${title} - الرمزي إخوان`;
+    document.title = `تقرير ${heading} - الرمزي إخوان`;
     window.print();
     document.title = previous;
   };
-  bindPager(data.total, reload);
+  if (!data.needsParty) bindPager(data.total, reload);
   if (data.type === 'sales' || data.type === 'purchases') bindRows(data.type);
+  content.querySelectorAll('.data-row.clickable[data-open]').forEach((row) => {
+    if (!row.dataset.open) return;
+    row.onclick = () => openInvoice(row.dataset.open, row.dataset.id);
+  });
+  const clearParty = document.getElementById('clearParty');
+  if (clearParty) {
+    clearParty.onclick = () => {
+      report.partyId = 0;
+      report.partyName = '';
+      state.page = 1;
+      reload();
+    };
+  }
+  const partyInput = document.getElementById('partyQ');
+  const partyHits = document.getElementById('partyHits');
+  if (partyInput && partyHits && partyMeta) {
+    let partyToken = 0;
+    partyInput.oninput = () => {
+      const token = ++partyToken;
+      clearTimeout(partyInput._timer);
+      partyInput._timer = setTimeout(async () => {
+        const q = partyInput.value.trim();
+        if (!q) { partyHits.innerHTML = ''; return; }
+        try {
+          const found = await api(`${partyMeta.path}?q=${encodeURIComponent(q)}&page=1&pageSize=10`);
+          if (token !== partyToken) return;
+          partyHits.innerHTML = found.rows.length
+            ? found.rows.map((row) => {
+              const extra = row.code ? row.code : [row.phone, row.mobile].filter(Boolean).join(' · ');
+              return `<button type="button" data-party="${row.id}" data-name="${esc(row.name)}"><span>${esc(row.name)}</span>${extra ? `<small>${esc(extra)}</small>` : ''}</button>`;
+            }).join('')
+            : '<p class="panel-note">لا توجد نتائج</p>';
+          partyHits.querySelectorAll('[data-party]').forEach((button) => {
+            button.onclick = () => {
+              report.partyId = Number(button.dataset.party);
+              report.partyName = button.dataset.name;
+              state.page = 1;
+              reload();
+            };
+          });
+        } catch (error) {
+          if (token === partyToken) partyHits.innerHTML = `<p class="error">${esc(error.message)}</p>`;
+        }
+      }, 250);
+    };
+  }
+}
+
+function periodDelta(current, previous) {
+  const now = Number(current) || 0;
+  const before = Number(previous) || 0;
+  if (!before && !now) return { text: 'لا حركة في الفترتين', dir: '' };
+  if (!before) return { text: 'لا يوجد رقم في الفترة السابقة', dir: 'up' };
+  const pct = Math.round(((now - before) / before) * 100);
+  if (!pct) return { text: 'مثل الفترة السابقة', dir: '' };
+  if (pct > 0) return { text: `أعلى ${num(pct)}% عن الفترة السابقة`, dir: 'up' };
+  return { text: `أقل ${num(Math.abs(pct))}% عن الفترة السابقة`, dir: 'down' };
 }
 
 function renderDashboard(data) {
   const month = data.month;
-  const fromLabel = new Date(`${month.start}T12:00:00`).toLocaleDateString('ar-EG', { month: 'short', year: 'numeric' });
-  const toLabel = new Date(`${month.end}T12:00:00`).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short', year: 'numeric' });
-  const periodLabel = data.range === '1' ? fromLabel : `${fromLabel} – ${toLabel}`;
-  const peak = Math.max(...data.days.map((day) => Number(day.total)), 1);
+  const salesDelta = periodDelta(month.sales, month.prevSales);
+  const buyDelta = periodDelta(month.purchases, month.prevPurchases);
+  const peak = Math.max(...data.days.map((day) => Number(day.total)), 0);
   const ranges = [['1', 'هذا الشهر'], ['3', '3 شهور'], ['6', '6 شهور'], ['12', 'سنة']];
-  const cards = [
-    ['مبيعات الفترة', kpiMoney(month.sales), `${num(month.saleCount)} فاتورة · ${periodLabel}`],
-    ['مشتريات الفترة', kpiMoney(month.purchases), `${num(month.purchaseCount)} فاتورة · ${periodLabel}`],
-    ['المتبقي على العملاء', kpiMoney(month.salesDue), 'غير محصّل من كل الفواتير'],
-    ['المتبقي للموردين', kpiMoney(month.purchaseDue), 'غير مسدّد من كل الفواتير']
+  const periodCards = [
+    { type: 'sales', label: 'مبيعات الفترة', value: kpiMoney(month.sales), note: `${num(month.saleCount)} فاتورة · ${salesDelta.text}`, dir: salesDelta.dir },
+    { type: 'purchases', label: 'مشتريات الفترة', value: kpiMoney(month.purchases), note: `${num(month.purchaseCount)} فاتورة · ${buyDelta.text}`, dir: buyDelta.dir }
+  ];
+  const balanceCards = [
+    { type: 'clients', label: 'المتبقي على العملاء', value: kpiMoney(month.salesDue), note: 'رصيد حالي لكل الفروع' },
+    { type: 'suppliers', label: 'المتبقي للموردين', value: kpiMoney(month.purchaseDue), note: 'رصيد حالي لكل الفروع' }
   ];
   const bars = data.days.map((day, index) => {
-    const height = Math.round((Number(day.total) / peak) * 100);
+    const total = Number(day.total);
+    const height = peak ? Math.round((total / peak) * 100) : 0;
     const label = data.monthly ? day.day.slice(5) : day.day.slice(8);
     const show = data.monthly || data.days.length <= 16 || index % Math.ceil(data.days.length / 8) === 0 || index === data.days.length - 1;
-    return `<div class="bar${index === data.days.length - 1 ? ' is-today' : ''}" title="${day.day} · ${money(day.total)}"><span style="height:${Math.max(height, Number(day.total) > 0 ? 8 : 2)}%"></span><em>${show ? label : ''}</em></div>`;
+    const isPeak = peak > 0 && total === peak;
+    const isLast = index === data.days.length - 1;
+    const amount = total > 0 && (data.monthly || isPeak || isLast) ? kpiMoney(total) : '';
+    return `<div class="bar${isLast ? ' is-today' : ''}${isPeak ? ' is-peak' : ''}" title="${day.day} · ${money(total)}"><b>${amount}</b><span style="height:${Math.max(height, total > 0 ? 8 : 2)}%"></span><em>${show ? label : ''}</em></div>`;
   }).join('');
+  const storeOptions = ['<option value="0">كل المخازن</option>'].concat(state.stores.map((store) =>
+    `<option value="${store.id}" ${String(store.id) === String(state.dashStore) ? 'selected' : ''}>${esc(store.name)}</option>`
+  )).join('');
   const top = grid(
     [
       { label: 'المنتج', width: '1.6fr' },
@@ -526,13 +748,13 @@ function renderDashboard(data) {
       classes: ['', '', '', '', '', Number(row.due) > 0 ? 'due' : 'ok']
     }))
   );
-  content.innerHTML = `<div class="range">${ranges.map(([id, label]) =>
+  const kpi = (card, balance) => `<article class="kpi clickable${balance ? ' kpi-balance' : ''}" data-open="${card.type}"><span>${card.label}</span><strong>${card.value}</strong><em class="${card.dir || ''}">${card.note}</em></article>`;
+  content.innerHTML = `<div class="dash-tools"><div class="range">${ranges.map(([id, label]) =>
     `<button type="button" data-range="${id}" class="${data.range === id ? 'active' : ''}">${label}</button>`
-  ).join('')}</div>
-  <div class="kpis">${cards.map(([label, value, note]) =>
-    `<article class="kpi"><span>${label}</span><strong>${value}</strong><em>${note}</em></article>`
-  ).join('')}</div>
-  <section class="panel"><h3><span>${data.monthly ? 'المبيعات شهرياً' : 'المبيعات يومياً'}</span></h3><div class="bars" style="--bars:${data.days.length}">${bars}</div></section>
+  ).join('')}</div><select id="dashStore" aria-label="المخزن">${storeOptions}</select></div>
+  <div class="kpis kpis-home">${periodCards.map((card) => kpi(card, false)).join('')}${balanceCards.map((card) => kpi(card, true)).join('')}</div>
+  <p class="panel-note">كرتا المتبقي لكل الفروع، وفلتر المخزن لا يغيّرهما.</p>
+  <section class="panel"><h3><span>${data.monthly ? 'المبيعات شهرياً' : 'المبيعات يومياً'}</span>${peak ? `<span class="chart-peak">أعلى قيمة ${money(peak)}</span>` : ''}</h3><div class="chart-scroll"><div class="bars" style="--bars:${data.days.length}">${bars}</div></div></section>
   <div class="split">
     <section class="panel"><h3><span>أعلى المبيعات</span></h3>${top}</section>
     <section class="panel"><h3><span>تحت حد الطلب</span></h3><p class="panel-note">يظهر الصنف عندما يصبح الرصيد 10% أو أقل. مثال: 100 قطعة تظهر عند 10.</p>${low}</section>
@@ -546,6 +768,26 @@ function renderDashboard(data) {
     button.onclick = () => {
       state.range = button.dataset.range;
       openSection('dashboard');
+    };
+  });
+  document.getElementById('dashStore').onchange = () => {
+    state.dashStore = document.getElementById('dashStore').value;
+    openSection('dashboard');
+  };
+  const chart = content.querySelector('.chart-scroll');
+  if (chart && chart.scrollWidth > chart.clientWidth + 8) {
+    chart.scrollLeft = document.dir === 'rtl' ? -chart.scrollWidth : chart.scrollWidth;
+  }
+  content.querySelectorAll('[data-open]').forEach((card) => {
+    card.onclick = () => {
+      const report = ensureReport();
+      report.type = card.dataset.open;
+      report.from = data.month.start;
+      report.to = data.month.end;
+      report.storeId = ['sales', 'purchases', 'products'].includes(card.dataset.open) ? String(state.dashStore || '0') : '0';
+      state.page = 1;
+      state.q = '';
+      openSection('reports');
     };
   });
 }
@@ -756,8 +998,14 @@ async function renderAccounts(data) {
   const primaryState = db.primaryUp ? 'متصلة' : 'واقفة';
   const standbyState = db.standbyUp ? 'جاهزة' : 'غير جاهزة';
   const copyLine = db.lastCopyAt ? `آخر نسخة: ${whenText(db.lastCopyAt)}` : 'لسه مفيش نسخة خارجية';
-  const canStandby = db.target !== 'standby' && !db.primaryUp && db.standbyUp;
-  const canPrimary = db.target === 'standby' && db.primaryUp;
+  const copyAge = db.lastCopyAt ? Date.now() - new Date(db.lastCopyAt).getTime() : Infinity;
+  const copyOld = !Number.isFinite(copyAge) || copyAge > 30 * 60 * 60 * 1000;
+  const copyWarn = copyOld
+    ? `<p class="copy-warn">تنبيه: آخر نسخة خارجية قديمة${db.lastCopyAt ? `، وآخر نسخة ناجحة كانت ${whenText(db.lastCopyAt)}` : ''}.</p>`
+    : '';
+  const switchButton = db.target === 'standby'
+    ? '<button id="dbSwitch" type="button" data-target="primary">الرجوع للقاعدة الأساسية</button>'
+    : '<button id="dbSwitch" type="button" data-target="standby">التحويل للنسخة الخارجية</button>';
   const rows = grid(
     [
       { label: 'الاسم', width: '1.3fr' },
@@ -776,32 +1024,35 @@ async function renderAccounts(data) {
       <h3>قاعدة البيانات</h3>
       <p class="meta"><span>الموقع شغال على ${where}</span><span>${copyLine}</span></p>
       <p class="meta"><span>الأساسية: ${primaryState}</span><span>النسخة الخارجية: ${standbyState}</span></p>
-      ${db.lastCopyError ? `<p class="error">${esc(db.lastCopyError)}</p>` : ''}
-      ${canStandby ? '<button id="dbSwitch" type="button" data-target="standby">التحويل للنسخة الخارجية</button>' : ''}
-      ${canPrimary ? '<button id="dbSwitch" type="button" data-target="primary">الرجوع للقاعدة الأساسية</button>' : ''}
-      <p class="note">النسخة الخارجية بتتاخد كل يوم الساعة 12 بالليل. التحويل يظهر لما الاتصال بالأساسية يقف، ويرجع لما الأساسية ترجع. برنامج الفروع القديم عنوانه منفصل ومش بيتغير من هنا.</p>
+      ${copyWarn}
+      ${switchButton}
+      <p class="note">${db.target === 'standby'
+        ? 'النسخة الخارجية للعرض فقط. لا يمكن تسجيل فاتورة أو تعديل منتج أو حساب. الرجوع للقاعدة الأساسية يتم من هنا لما تتصل.'
+        : 'التحويل متاح في أي وقت. النسخة الخارجية آخر نسخة محفوظة، وبعد التحويل النظام يبقى للعرض فقط. برنامج الفروع القديم عنوانه منفصل ومش بيتغير من هنا.'}</p>
     </div>
     <div class="toolbar"><button id="addAccount" type="button">حساب جديد</button></div>${rows}<p class="note">قسم الحسابات ظاهر لصاحب النظام فقط. المدير يقدر يستخدم المخزون والفواتير من غير ما يدير الحسابات.</p>`;
   const dbSwitch = document.getElementById('dbSwitch');
   if (dbSwitch) dbSwitch.onclick = async () => {
     const target = dbSwitch.dataset.target;
     const message = target === 'standby'
-      ? 'الموقع هيحوّل على النسخة الخارجية، وهي آخر نسخة من نص الليل ومش آخر لحظة.'
-      : 'الموقع هيرجع على القاعدة الأساسية.';
+      ? 'الموقع هيحوّل على النسخة الخارجية للعرض فقط. لا يمكن تسجيل فواتير أو تعديل بيانات، والنسخة آخر نسخة محفوظة.'
+      : 'الموقع هيرجع على القاعدة الأساسية، والعمليات هترجع تتشغّل.';
     if (!window.confirm(message)) return;
     dbSwitch.disabled = true;
     try {
-      await api('/api/database/switch', { method: 'POST', body: JSON.stringify({ target }) });
+      const result = await api('/api/database/switch', { method: 'POST', body: JSON.stringify({ target }) });
+      state.readOnly = Boolean(result.readOnly);
+      applyReadOnly();
       await openSection('accounts');
     } catch (error) {
       dbSwitch.disabled = false;
       window.alert(error.message);
     }
   };
-  document.getElementById('addAccount').onclick = () => openAccountForm(null);
+  document.getElementById('addAccount').onclick = () => { if (!state.readOnly) openAccountForm(null); };
   content.querySelectorAll('.data-row.clickable').forEach((row) => {
     const user = data.users.find((item) => item.id === row.dataset.id);
-    row.onclick = () => openAccountForm(user);
+    row.onclick = () => { if (!state.readOnly) openAccountForm(user); };
   });
 }
 
@@ -881,9 +1132,9 @@ function renderSimple(kind, data, rows) {
   content.innerHTML = `${toolbar()}${rows}${pager(data.total)}`;
   bindSearch(() => openSection(kind));
   bindPager(data.total, () => openSection(kind));
-  if (kind === 'suppliers') {
+  if (kind === 'suppliers' || kind === 'clients') {
     content.querySelectorAll('.data-row.clickable').forEach((row) => {
-      row.onclick = () => openSupplierPurchases(row.dataset.id, row.dataset.name, row.dataset.acc);
+      row.onclick = () => (kind === 'suppliers' ? openSupplierPurchases : openClientSales)(row.dataset.id, row.dataset.name, row.dataset.acc);
     });
   }
 }
@@ -936,6 +1187,58 @@ async function openSupplierPurchases(id, name, acc, page = 1) {
     });
   } catch (error) {
     drawer.innerHTML = `<article class="sheet"><header><h2>فواتير الشراء</h2><button id="closeDrawer" class="ghost" type="button">إغلاق</button></header><div class="error">${esc(error.message)}</div></article>`;
+    document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
+  }
+}
+
+async function openClientSales(id, name, acc, page = 1) {
+  drawer.classList.remove('hidden');
+  drawer.innerHTML = `<article class="sheet"><header><div><h2>فواتير البيع</h2><p>${esc(name)}</p></div><button id="closeDrawer" class="ghost" type="button">إغلاق</button></header><div class="skeleton"><span></span><span></span><span></span></div></article>`;
+  document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
+  try {
+    const data = await api(`/api/clients/${id}/sales?page=${page}&pageSize=20`);
+    const client = data.client || { name, accCode: acc };
+    const pages = Math.max(1, Math.ceil(data.total / 20));
+    const rows = grid(
+      [
+        { label: 'الرقم', width: '0.6fr' },
+        { label: 'التاريخ', width: '0.8fr' },
+        { label: 'المستخدم', width: '0.9fr' },
+        { label: 'الإجمالي', width: '0.8fr' },
+        { label: 'المدفوع', width: '0.7fr' },
+        { label: 'المتبقي', width: '0.7fr' }
+      ],
+      data.rows.map((row) => ({
+        clickable: true,
+        attrs: `data-id="${row.id}"`,
+        cells: [row.no, dateText(row.date), whoText(row.byName), money(row.amount), money(row.paid), money(row.due)]
+      }))
+    );
+    drawer.innerHTML = `<article class="sheet">
+      <header>
+        <div><h2>فواتير البيع</h2><p>${esc(client.name)}${client.accCode ? ` · ${esc(client.accCode)}` : ''}</p></div>
+        <button id="closeDrawer" class="ghost" type="button">إغلاق</button>
+      </header>
+      <p class="meta"><span>${num(data.total)} فاتورة</span></p>
+      ${data.rows.length ? rows : '<div class="empty">لا توجد فواتير بيع لهذا العميل</div>'}
+      <div class="pager">
+        <button type="button" id="histPrev" ${page <= 1 ? 'disabled' : ''}>السابق</button>
+        <button type="button" id="histNext" ${page >= pages ? 'disabled' : ''}>التالي</button>
+      </div>
+    </article>`;
+    document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
+    document.getElementById('histPrev').onclick = () => { if (page > 1) openClientSales(id, client.name, client.accCode, page - 1); };
+    document.getElementById('histNext').onclick = () => { if (page < pages) openClientSales(id, client.name, client.accCode, page + 1); };
+    drawer.onclick = (event) => { if (event.target === drawer) drawer.classList.add('hidden'); };
+    drawer.querySelectorAll('.data-row.clickable').forEach((row) => {
+      row.onclick = async () => {
+        await openInvoice('sales', row.dataset.id);
+        const close = document.getElementById('closeDrawer');
+        if (close) close.onclick = () => openClientSales(id, client.name, client.accCode, page);
+      };
+    });
+  } catch (error) {
+    drawer.innerHTML = `<article class="sheet"><header><h2>فواتير البيع</h2><button id="closeDrawer" class="ghost" type="button">إغلاق</button></header><div class="error">${esc(error.message)}</div></article>`;
     document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
   }
 }
@@ -1118,6 +1421,25 @@ function readLineInputs(lines) {
   });
 }
 
+function paidFields(paid, partial, label) {
+  return `<label class="checkline"><input id="paidNow" type="checkbox" ${paid ? 'checked' : ''}> ${label}</label>
+        <label class="paid-amount${paid ? '' : ' hidden'}" id="paidAmountWrap">المدفوع<input id="paidAmount" type="number" min="0" step="0.01" value="${partial || ''}" placeholder="كامل الإجمالي"></label>`;
+}
+
+function bindPaidAmount() {
+  const box = document.getElementById('paidNow');
+  const wrap = document.getElementById('paidAmountWrap');
+  box.onchange = () => wrap.classList.toggle('hidden', !box.checked);
+}
+
+function paidPayload() {
+  const paid = document.getElementById('paidNow').checked;
+  const raw = document.getElementById('paidAmount').value.trim();
+  const payload = { paid };
+  if (paid && raw !== '') payload.paidAmount = Number(raw);
+  return payload;
+}
+
 function editHeading(kind, no) {
   const title = document.querySelector('#title span');
   if (title) title.textContent = kind === 'sales' ? `تعديل فاتورة بيع ${no}` : `تعديل فاتورة شراء ${no}`;
@@ -1133,7 +1455,7 @@ function renderNewSale() {
       <div class="toolbar">
         <input id="clientQ" placeholder="ابحث عن عميل للبيع الآجل">
         <select id="saleStore">${storeOptions(draft.storeId)}</select>
-        <label class="checkline"><input id="paidNow" type="checkbox" ${!editing || draft.paid ? 'checked' : ''}> تحصيل نقدي</label>
+        ${paidFields(draft.paid, draft.partial, 'تحصيل نقدي')}
         <button id="findClient" type="button" class="ghost">بحث عميل</button>
       </div>
       <div id="clientPick" class="meta">العميل: ${esc(draft.clientName || 'عميل نقدي')}</div>
@@ -1151,7 +1473,7 @@ function renderNewSale() {
         <div id="draftLines"></div>
       </div>
       <div class="meta"><span id="draftTotal">الإجمالي: 0</span></div>
-      ${draft.partial ? `<p class="note">المحصّل حالياً ${money(draft.partial)}. لو سيبت التحصيل غير محدد، المبلغ المحصّل يفضل كما هو.</p>` : ''}
+      <p class="note">${draft.partial ? `المحصّل حالياً ${money(draft.partial)}. غيّر خانة المدفوع لو عايز مبلغاً مختلفاً، ولو فضيتها التحصيل يبقى على كامل الفاتورة. لو شلت العلامة، المبلغ المحصّل يفضل كما هو.` : 'اكتب في خانة المدفوع مبلغاً أقل من الإجمالي لو التحصيل جزئي، والباقي يفضل على العميل. اتركها فاضية لتحصيل الفاتورة كاملة.'}</p>
       <button id="saveSale" class="primary" type="button">${editing ? 'حفظ التعديل' : 'حفظ الفاتورة'}</button>
       ${editing ? '<button id="cancelEdit" class="ghost wide-ghost" type="button">رجوع للفاتورة</button>' : ''}
       <p class="note">${editing ? 'حفظ التعديل يغيّر أصناف الفاتورة والمخزون والقيد على قاعدة البيانات الفعلية.' : 'الحفظ ينزل على قاعدة البيانات الفعلية: فاتورة، أصناف، مخزون، قيد، وتحصيل نقدي لو تم اختياره.'}</p>
@@ -1178,6 +1500,7 @@ function renderNewSale() {
     });
   };
   drawLines();
+  bindPaidAmount();
   document.getElementById('findClient').onclick = async () => {
     const q = document.getElementById('clientQ').value.trim();
     const data = await api('/api/clients?q=' + encodeURIComponent(q) + '&page=1&pageSize=8');
@@ -1254,7 +1577,7 @@ function renderNewSale() {
       const payload = {
         clientId: draft.clientId,
         storeId: Number(document.getElementById('saleStore').value),
-        paid: document.getElementById('paidNow').checked,
+        ...paidPayload(),
         lines: draft.lines.map((line) => ({
           lineId: line.lineId,
           productId: line.productId,
@@ -1288,7 +1611,7 @@ function renderNewPurchase() {
       <div class="toolbar">
         <input id="supplierQ" placeholder="ابحث عن مورد للشراء الآجل">
         <select id="purchaseStore">${storeOptions(purchaseDraft.storeId)}</select>
-        <label class="checkline"><input id="paidNow" type="checkbox" ${!editing || purchaseDraft.paid ? 'checked' : ''}> سداد نقدي</label>
+        ${paidFields(purchaseDraft.paid, purchaseDraft.partial, 'سداد نقدي')}
         <button id="findSupplier" type="button" class="ghost">بحث مورد</button>
       </div>
       <div id="supplierPick" class="meta">المورد: ${esc(purchaseDraft.supplierName || 'مشتريات نقدية')}</div>
@@ -1306,7 +1629,7 @@ function renderNewPurchase() {
         <div id="draftLines"></div>
       </div>
       <div class="meta"><span id="draftTotal">الإجمالي: 0</span></div>
-      ${purchaseDraft.partial ? `<p class="note">المدفوع حالياً ${money(purchaseDraft.partial)}. لو سيبت السداد غير محدد، المبلغ المدفوع يفضل كما هو.</p>` : ''}
+      <p class="note">${purchaseDraft.partial ? `المدفوع حالياً ${money(purchaseDraft.partial)}. غيّر خانة المدفوع لو عايز مبلغاً مختلفاً، ولو فضيتها السداد يبقى على كامل الفاتورة. لو شلت العلامة، المبلغ المدفوع يفضل كما هو.` : 'اكتب في خانة المدفوع مبلغاً أقل من الإجمالي لو السداد جزئي، والباقي يفضل على المورد. اتركها فاضية لسداد الفاتورة كاملة.'}</p>
       <button id="savePurchase" class="primary" type="button">${editing ? 'حفظ التعديل' : 'حفظ فاتورة الشراء'}</button>
       ${editing ? '<button id="cancelEdit" class="ghost wide-ghost" type="button">رجوع للفاتورة</button>' : ''}
       <p class="note">${editing ? 'حفظ التعديل يغيّر أصناف الفاتورة والمخزون والقيد على قاعدة البيانات الفعلية.' : 'الحفظ ينزل على قاعدة البيانات الفعلية: فاتورة شراء، أصناف، زيادة المخزون، قيد، وسداد نقدي لو تم اختياره.'}</p>
@@ -1333,6 +1656,7 @@ function renderNewPurchase() {
     });
   };
   drawLines();
+  bindPaidAmount();
   document.getElementById('findSupplier').onclick = async () => {
     const q = document.getElementById('supplierQ').value.trim();
     const data = await api('/api/suppliers?q=' + encodeURIComponent(q) + '&page=1&pageSize=8');
@@ -1409,7 +1733,7 @@ function renderNewPurchase() {
       const payload = {
         supplierId: purchaseDraft.supplierId,
         storeId: Number(document.getElementById('purchaseStore').value),
-        paid: document.getElementById('paidNow').checked,
+        ...paidPayload(),
         lines: purchaseDraft.lines.map((line) => ({
           lineId: line.lineId,
           productId: line.productId,
@@ -1587,8 +1911,8 @@ async function beginEdit(kind, id) {
   target.lines = lines;
   target.editId = Number(id);
   target.editNo = invoice.no;
-  target.paid = fully;
   target.partial = !fully && Number(invoice.paid) > 0 ? Number(invoice.paid) : 0;
+  target.paid = fully || target.partial > 0;
   target.storeId = lines[0] ? lines[0].storeId : null;
   target.hold = true;
   await openSection(kind === 'sales' ? 'newSale' : 'newPurchase');
@@ -1661,6 +1985,7 @@ document.getElementById('loginForm').addEventListener('submit', async (event) =>
         password: document.getElementById('password').value
       })
     });
+    state.readOnly = Boolean(data.readOnly);
     showApp(data.user);
   } catch (error) {
     document.getElementById('loginError').textContent = error.message;
@@ -1680,4 +2005,8 @@ document.getElementById('menuBtn').onclick = () => {
 document.getElementById('moreBtn').onclick = openMenu;
 document.getElementById('scrim').onclick = closeMenu;
 
-api('/api/me').then((data) => { if (data.user) showApp(data.user); }).catch(() => {});
+api('/api/me').then((data) => {
+  if (!data.user) return;
+  state.readOnly = Boolean(data.readOnly);
+  showApp(data.user);
+}).catch(() => {});

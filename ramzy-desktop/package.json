@@ -1,6 +1,6 @@
 {
   "name": "ramzy-erp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "AL RAMZY BROTHERS desktop window for the live ERP",
   "main": "main.js",
   "author": "AL RAMZY BROTHERS",
@@ -22,6 +22,7 @@
     "files": [
       "main.js",
       "offline.html",
+      "app-key",
       "icon.ico",
       "icon.png"
     ],
@@ -39,7 +40,7 @@
       "shortcutName": "الرمزي",
       "installerIcon": "icon.ico",
       "uninstallerIcon": "icon.ico",
-      "artifactName": "RamzyERP-Setup.${ext}"
+      "artifactName": "RamzyERP-Setup-${version}.${ext}"
     }
   }
 }

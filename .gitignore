@@ -8,3 +8,12 @@ warehouse-app/data/users.json
 warehouse-app/data/activity.json
 warehouse-app/data/db-target.json
 warehouse-app/check_api.py
+ramzy-desktop/app-key
+ramzy-mobile/app-key
+ramzy-mobile/keystore.properties
+ramzy-mobile/*.keystore
+ramzy-mobile/local.properties
+ramzy-mobile/.gradle/
+ramzy-mobile/build/
+ramzy-mobile/app/build/
+release/
