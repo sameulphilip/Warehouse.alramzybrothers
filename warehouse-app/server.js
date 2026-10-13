@@ -463,10 +463,25 @@ app.get('/api/activity', requireAuth, (req, res) => {
   res.json({ page, pageSize, total: rows.length, rows: rows.slice(start - 1, end) });
 });
 
-function dashboardRange(value) {
-  const ranges = { '1': 0, '3': 2, '6': 5, '12': 11 };
-  const range = Object.prototype.hasOwnProperty.call(ranges, String(value)) ? String(value) : '1';
-  return { range, back: ranges[range], monthly: range !== '1' };
+function chosenStore(value) {
+  if (value === undefined || value === null || value === '' || value === 'all') return null;
+  const id = Number(value);
+  return Number.isFinite(id) && id >= 0 ? id : null;
+}
+
+function dashboardPeriod(query) {
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  const today = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+  const todayKey = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  const monthStart = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-01`;
+  let from = iso.test(String(query.from || '')) ? String(query.from) : monthStart;
+  let to = iso.test(String(query.to || '')) ? String(query.to) : todayKey;
+  if (from > to) [from, to] = [to, from];
+  const start = new Date(`${from}T12:00:00Z`);
+  const end = new Date(`${to}T12:00:00Z`);
+  const days = Math.round((end - start) / 86400000) + 1;
+  return { from, to, today: todayKey, monthly: days > 62 };
 }
 
 function fillBuckets(rows, startKey, todayKey, monthly) {
@@ -485,46 +500,48 @@ function fillBuckets(rows, startKey, todayKey, monthly) {
 
 app.get('/api/dashboard', requireAuth, async (req, res) => {
   try {
-    const choice = dashboardRange(req.query.range);
-    const storeId = Number(req.query.storeId || 0);
-    const store = Number.isFinite(storeId) && storeId > 0 ? storeId : 0;
-    const payload = await cached(`dashboard:${choice.range}:${store}`, 60000, async () => {
+    const period = dashboardPeriod(req.query);
+    const store = chosenStore(req.query.storeId);
+    const payload = await cached(`dashboard:${period.from}:${period.to}:${store == null ? 'all' : store}`, 60000, async () => {
     const pool = await poolPromise;
     const periodSql = `
-      DECLARE @today datetime, @monthStart datetime, @start datetime, @end datetime, @prevStart datetime, @prevEnd datetime
-      SET @today = DATEADD(day, DATEDIFF(day, 0, GETDATE()), 0)
-      SET @monthStart = DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
-      SET @start = DATEADD(month, -@back, @monthStart)
-      SET @end = DATEADD(day, 1, @today)
-      SET @prevStart = DATEADD(month, -(@back + 1), @start)
-      SET @prevEnd = DATEADD(month, -(@back + 1), @end)
+      DECLARE @start datetime, @end datetime, @prevStart datetime, @prevEnd datetime
+      SET @start = CONVERT(datetime, @from + ' 00:00:00', 120)
+      SET @end = DATEADD(day, 1, CONVERT(datetime, @to + ' 00:00:00', 120))
+      SET @prevEnd = @start
+      SET @prevStart = DATEADD(day, -DATEDIFF(day, @start, @end), @start)
     `;
-    const saleMoney = store
+    const bindPeriod = (request) => {
+      request.input('from', sql.VarChar(10), period.from);
+      request.input('to', sql.VarChar(10), period.to);
+      request.input('store', sql.Int, store == null ? 0 : store);
+      request.input('allStores', sql.Int, store == null ? 1 : 0);
+    };
+    const saleMoney = store != null
       ? `ISNULL((SELECT SUM(ISNULL(d.TotalPrice, 0)) FROM tblSellingInvoicesDetails d INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID WHERE d.StoreID = @store AND si.SellingInvoiceDate >= @start AND si.SellingInvoiceDate < @end), 0)`
       : `ISNULL((SELECT SUM(SellingInvoiceTotalAmount) FROM tblSellingInvoice WHERE SellingInvoiceDate >= @start AND SellingInvoiceDate < @end), 0)`;
-    const saleCount = store
+    const saleCount = store != null
       ? `ISNULL((SELECT COUNT(DISTINCT si.SellingInvoiceID) FROM tblSellingInvoicesDetails d INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID WHERE d.StoreID = @store AND si.SellingInvoiceDate >= @start AND si.SellingInvoiceDate < @end), 0)`
       : `ISNULL((SELECT COUNT(*) FROM tblSellingInvoice WHERE SellingInvoiceDate >= @start AND SellingInvoiceDate < @end), 0)`;
-    const prevSales = store
+    const prevSales = store != null
       ? `ISNULL((SELECT SUM(ISNULL(d.TotalPrice, 0)) FROM tblSellingInvoicesDetails d INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID WHERE d.StoreID = @store AND si.SellingInvoiceDate >= @prevStart AND si.SellingInvoiceDate < @prevEnd), 0)`
       : `ISNULL((SELECT SUM(SellingInvoiceTotalAmount) FROM tblSellingInvoice WHERE SellingInvoiceDate >= @prevStart AND SellingInvoiceDate < @prevEnd), 0)`;
-    const buyMoney = store
+    const buyMoney = store != null
       ? `ISNULL((SELECT SUM(ISNULL(d.TotalPricePerProduct, 0)) FROM tblPurchaseInvoicesDetails d INNER JOIN tblPurchaseInvoice pi ON pi.PurchaseInvoiceID = d.PurchaseInvoiceID WHERE d.StoreID = @store AND pi.PurchaseInvoiceDate >= @start AND pi.PurchaseInvoiceDate < @end), 0)`
       : `ISNULL((SELECT SUM(PurchaseInvoiceTotalAmount) FROM tblPurchaseInvoice WHERE PurchaseInvoiceDate >= @start AND PurchaseInvoiceDate < @end), 0)`;
-    const buyCount = store
+    const buyCount = store != null
       ? `ISNULL((SELECT COUNT(DISTINCT pi.PurchaseInvoiceID) FROM tblPurchaseInvoicesDetails d INNER JOIN tblPurchaseInvoice pi ON pi.PurchaseInvoiceID = d.PurchaseInvoiceID WHERE d.StoreID = @store AND pi.PurchaseInvoiceDate >= @start AND pi.PurchaseInvoiceDate < @end), 0)`
       : `ISNULL((SELECT COUNT(*) FROM tblPurchaseInvoice WHERE PurchaseInvoiceDate >= @start AND PurchaseInvoiceDate < @end), 0)`;
-    const prevBuys = store
+    const prevBuys = store != null
       ? `ISNULL((SELECT SUM(ISNULL(d.TotalPricePerProduct, 0)) FROM tblPurchaseInvoicesDetails d INNER JOIN tblPurchaseInvoice pi ON pi.PurchaseInvoiceID = d.PurchaseInvoiceID WHERE d.StoreID = @store AND pi.PurchaseInvoiceDate >= @prevStart AND pi.PurchaseInvoiceDate < @prevEnd), 0)`
       : `ISNULL((SELECT SUM(PurchaseInvoiceTotalAmount) FROM tblPurchaseInvoice WHERE PurchaseInvoiceDate >= @prevStart AND PurchaseInvoiceDate < @prevEnd), 0)`;
     const summaryRequest = pool.request();
-    summaryRequest.input('back', sql.Int, choice.back);
-    summaryRequest.input('store', sql.Int, store);
+    bindPeriod(summaryRequest);
     const summary = await summaryRequest.query(`
       ${periodSql}
       SELECT
-        CONVERT(char(10), @today, 120) AS todayKey,
         CONVERT(char(10), @start, 120) AS periodStart,
+        CONVERT(char(10), DATEADD(day, -1, @end), 120) AS periodEnd,
         ${saleMoney} AS sales,
         ${saleCount} AS saleCount,
         ${prevSales} AS prevSales,
@@ -535,10 +552,9 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
         (SELECT ISNULL(SUM(NotPaiedAmount), 0) FROM tblPurchaseInvoice) AS purchaseDue
     `);
     const trendRequest = pool.request();
-    trendRequest.input('back', sql.Int, choice.back);
-    trendRequest.input('store', sql.Int, store);
-    const bucket = choice.monthly ? 'char(7)' : 'char(10)';
-    const trend = await trendRequest.query(store ? `
+    bindPeriod(trendRequest);
+    const bucket = period.monthly ? 'char(7)' : 'char(10)';
+    const trend = await trendRequest.query(store != null ? `
       ${periodSql}
       SELECT CONVERT(${bucket}, si.SellingInvoiceDate, 120) AS bucket,
              ISNULL(SUM(d.TotalPrice), 0) AS total
@@ -556,8 +572,7 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
       GROUP BY CONVERT(${bucket}, SellingInvoiceDate, 120)
     `);
     const topRequest = pool.request();
-    topRequest.input('back', sql.Int, choice.back);
-    topRequest.input('store', sql.Int, store);
+    bindPeriod(topRequest);
     const top = await topRequest.query(`
       ${periodSql}
       SELECT TOP 5
@@ -570,12 +585,12 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
       INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
       INNER JOIN tblProducts p ON p.ProductId = d.ProductID
       WHERE si.SellingInvoiceDate >= @start AND si.SellingInvoiceDate < @end
-        AND (@store = 0 OR d.StoreID = @store)
+        AND (@allStores = 1 OR d.StoreID = @store)
       GROUP BY p.ProductId, p.ProductName, p.ProductCode
       ORDER BY SUM(ISNULL(d.TotalPrice, 0)) DESC
     `);
     const lowRequest = pool.request();
-    lowRequest.input('store', sql.Int, store);
+    bindPeriod(lowRequest);
     const low = await lowRequest.query(`
       SELECT
         picked.id,
@@ -599,14 +614,14 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
         INNER JOIN (
           SELECT ProductID, SUM(ISNULL(ProductStock, 0)) AS qty
           FROM tblProductsStores
-          WHERE @store = 0 OR StoreID = @store
+          WHERE @allStores = 1 OR StoreID = @store
           GROUP BY ProductID
         ) stock ON stock.ProductID = p.ProductId
         INNER JOIN (
           SELECT ProductID,
             SUM(ISNULL(OutQuantity, 0) + ISNULL(OutBonus, 0) - ISNULL(ReturnedQuantity, 0)) AS netSold
           FROM tblSellingInvoicesDetails
-          WHERE @store = 0 OR StoreID = @store
+          WHERE @allStores = 1 OR StoreID = @store
           GROUP BY ProductID
         ) sold ON sold.ProductID = p.ProductId
         WHERE sold.netSold > 0
@@ -620,11 +635,11 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
         FROM tblProductsStores ps
         INNER JOIN tblStores s ON s.StoreID = ps.StoreID
         WHERE ps.ProductID = picked.id
-        ORDER BY CASE WHEN @store > 0 AND ps.StoreID = @store THEN 0 ELSE 1 END, ISNULL(ps.ProductStock, 0) DESC, s.StoreName
+        ORDER BY CASE WHEN @allStores = 0 AND ps.StoreID = @store THEN 0 ELSE 1 END, ISNULL(ps.ProductStock, 0) DESC, s.StoreName
       ) loc
     `);
     const recentRequest = pool.request();
-    recentRequest.input('store', sql.Int, store);
+    bindPeriod(recentRequest);
     const recent = await recentRequest.query(`
       SELECT TOP 3
         si.SellingInvoiceID AS id,
@@ -636,7 +651,7 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
         ISNULL(si.InsertedBy, N'') AS byName
       FROM tblSellingInvoice si
       LEFT JOIN tblClients c ON c.ClientId = si.ClientID
-      WHERE @store = 0 OR EXISTS (
+      WHERE @allStores = 1 OR EXISTS (
         SELECT 1 FROM tblSellingInvoicesDetails d
         WHERE d.SellingInvoiceID = si.SellingInvoiceID AND d.StoreID = @store
       )
@@ -644,14 +659,16 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
     `);
     const head = summary.recordset[0];
     const startKey = String(head.periodStart).slice(0, 10);
-    const todayKey = String(head.todayKey).slice(0, 10);
+    const endKey = String(head.periodEnd).slice(0, 10);
     return {
-      range: choice.range,
+      from: period.from,
+      to: period.to,
+      today: period.today,
       store,
-      monthly: choice.monthly,
+      monthly: period.monthly,
       month: {
         start: startKey,
-        end: todayKey,
+        end: endKey,
         sales: Number(head.sales),
         saleCount: Number(head.saleCount),
         prevSales: Number(head.prevSales),
@@ -661,7 +678,7 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
         salesDue: Number(head.salesDue),
         purchaseDue: Number(head.purchaseDue)
       },
-      days: fillBuckets(trend.recordset, startKey, todayKey, choice.monthly),
+      days: fillBuckets(trend.recordset, startKey, endKey, period.monthly),
       topProducts: top.recordset,
       lowStock: low.recordset,
       recentSales: recent.recordset
@@ -701,7 +718,7 @@ function partyReportSpec(type, period, periodEnd) {
     INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
     LEFT JOIN tblClients c ON c.ClientId = si.ClientID
     LEFT JOIN tblStores st ON st.StoreID = d.StoreID
-    WHERE d.ProductID = @partyId AND ${span('si.SellingInvoiceDate')} AND (@storeId = 0 OR d.StoreID = @storeId)
+    WHERE d.ProductID = @partyId AND ${span('si.SellingInvoiceDate')} AND (@allStores = 1 OR d.StoreID = @storeId)
     UNION ALL
     SELECT N'شراء', CAST(pi.PurchaseInvoiceID AS numeric(18,0)), CAST(pi.PurchaseInvoiceNo AS numeric(18,0)),
       pi.PurchaseInvoiceDate, ISNULL(NULLIF(LTRIM(RTRIM(s.SupplierName)), N''), N'بدون مورد'),
@@ -711,7 +728,7 @@ function partyReportSpec(type, period, periodEnd) {
     INNER JOIN tblPurchaseInvoice pi ON pi.PurchaseInvoiceID = d.PurchaseInvoiceID
     LEFT JOIN tblSuppliers s ON s.SupplierID = pi.SupplierID
     LEFT JOIN tblStores st ON st.StoreID = d.StoreID
-    WHERE d.ProductID = @partyId AND ${span('pi.PurchaseInvoiceDate')} AND (@storeId = 0 OR d.StoreID = @storeId)
+    WHERE d.ProductID = @partyId AND ${span('pi.PurchaseInvoiceDate')} AND (@allStores = 1 OR d.StoreID = @storeId)
     UNION ALL
     SELECT N'مرتجع بيع', CAST(r.ReturnSellPermissionID AS numeric(18,0)), CAST(r.ReturnSellPermissionNo AS numeric(18,0)),
       r.ReturnSellPermissionDate, ISNULL(NULLIF(LTRIM(RTRIM(c.ClientName)), N''), N'عميل نقدي'),
@@ -721,7 +738,7 @@ function partyReportSpec(type, period, periodEnd) {
     INNER JOIN tblReturnSellPermission r ON r.ReturnSellPermissionID = d.ReturnSellPermissionID
     LEFT JOIN tblClients c ON c.ClientId = r.ClientID
     LEFT JOIN tblStores st ON st.StoreID = d.StoreID
-    WHERE d.ProductID = @partyId AND ${span('r.ReturnSellPermissionDate')} AND (@storeId = 0 OR d.StoreID = @storeId)
+    WHERE d.ProductID = @partyId AND ${span('r.ReturnSellPermissionDate')} AND (@allStores = 1 OR d.StoreID = @storeId)
     UNION ALL
     SELECT N'مرتجع شراء', CAST(r.ReturnPurchasePermissionID AS numeric(18,0)), CAST(r.ReturnPurchasePermissionNo AS numeric(18,0)),
       r.ReturnPurchasePermissionDate, ISNULL(NULLIF(LTRIM(RTRIM(s.SupplierName)), N''), N'بدون مورد'),
@@ -731,7 +748,7 @@ function partyReportSpec(type, period, periodEnd) {
     INNER JOIN tblReturnPurchasePermission r ON r.ReturnPurchasePermissionID = d.ReturnPurchasePermissionID
     LEFT JOIN tblSuppliers s ON s.SupplierID = r.SupplierID
     LEFT JOIN tblStores st ON st.StoreID = d.StoreID
-    WHERE d.ProductID = @partyId AND ${span('r.ReturnPurchasePermissionDate')} AND (@storeId = 0 OR d.StoreID = @storeId)
+    WHERE d.ProductID = @partyId AND ${span('r.ReturnPurchasePermissionDate')} AND (@allStores = 1 OR d.StoreID = @storeId)
     UNION ALL
     SELECT CASE WHEN ISNULL(i.InQuantity, 0) > 0 AND ISNULL(i.OutQuantity, 0) = 0 THEN N'جرد دخول' ELSE N'جرد خروج' END,
       CAST(ISNULL(i.InvoiceNo, 0) AS numeric(18,0)), CAST(ISNULL(i.InvoiceNo, 0) AS numeric(18,0)),
@@ -743,7 +760,7 @@ function partyReportSpec(type, period, periodEnd) {
       N''
     FROM tblInventory i
     LEFT JOIN tblStores st ON st.StoreID = i.StoreID
-    WHERE i.ProductID = @partyId AND i.TransactionID = 15 AND ${span('ISNULL(i.InvoiceDate, i.DocumentDate)')} AND (@storeId = 0 OR i.StoreID = @storeId)
+    WHERE i.ProductID = @partyId AND i.TransactionID = 15 AND ${span('ISNULL(i.InvoiceDate, i.DocumentDate)')} AND (@allStores = 1 OR i.StoreID = @storeId)
     UNION ALL
     SELECT CASE WHEN ISNULL(i.InQuantity, 0) > 0 AND ISNULL(i.OutQuantity, 0) = 0 THEN N'تحويل دخول' ELSE N'تحويل خروج' END,
       CAST(ISNULL(i.InvoiceNo, 0) AS numeric(18,0)), CAST(ISNULL(i.InvoiceNo, 0) AS numeric(18,0)),
@@ -755,7 +772,7 @@ function partyReportSpec(type, period, periodEnd) {
       N''
     FROM tblInventory i
     LEFT JOIN tblStores st ON st.StoreID = i.StoreID
-    WHERE i.ProductID = @partyId AND i.TransactionID = 16 AND ${span('ISNULL(i.InvoiceDate, i.DocumentDate)')} AND (@storeId = 0 OR i.StoreID = @storeId)`;
+    WHERE i.ProductID = @partyId AND i.TransactionID = 16 AND ${span('ISNULL(i.InvoiceDate, i.DocumentDate)')} AND (@allStores = 1 OR i.StoreID = @storeId)`;
   const clientMoves = `
     SELECT N'فاتورة بيع' AS kind, CAST(si.SellingInvoiceID AS numeric(18,0)) AS docId, CAST(si.SellingInvoiceNo AS numeric(18,0)) AS no,
       si.SellingInvoiceDate AS date, CAST(ISNULL(si.SellingInvoiceTotalAmount, 0) AS float) AS total,
@@ -890,13 +907,14 @@ app.get('/api/reports', requireAuth, async (req, res) => {
       });
     }
     const q = String(req.query.q || '').trim().slice(0, 80);
-    const storeId = Number(req.query.storeId || 0);
+    const store = chosenStore(req.query.storeId);
     const filters = [
       { name: 'from', type: sql.VarChar(10), value: from },
       { name: 'to', type: sql.VarChar(10), value: to },
       { name: 'q', type: sql.NVarChar(80), value: q },
       { name: 'like', type: sql.NVarChar(90), value: likeOf(q) },
-      { name: 'storeId', type: sql.Int, value: Number.isFinite(storeId) ? storeId : 0 },
+      { name: 'storeId', type: sql.Int, value: store == null ? 0 : store },
+      { name: 'allStores', type: sql.Int, value: store == null ? 1 : 0 },
       { name: 'partyId', type: sql.Numeric(18, 0), value: Number.isFinite(partyId) && partyId > 0 ? partyId : 0 },
       { name: 'start', type: sql.Int, value: start },
       { name: 'end', type: sql.Int, value: end }
@@ -1031,7 +1049,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
             INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
             INNER JOIN tblProducts p ON p.ProductId = d.ProductID
             WHERE si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
-              AND (@storeId = 0 OR d.StoreID = @storeId)
+              AND (@allStores = 1 OR d.StoreID = @storeId)
               AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)
             GROUP BY p.ProductId
           ) lines`,
@@ -1047,7 +1065,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
             INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
             INNER JOIN tblProducts p ON p.ProductId = d.ProductID
             WHERE si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
-              AND (@storeId = 0 OR d.StoreID = @storeId)
+              AND (@allStores = 1 OR d.StoreID = @storeId)
               AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)
             GROUP BY p.ProductId, p.ProductCode, p.ProductName
           ),
@@ -1066,7 +1084,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
           FROM tblProductsStores ps
           INNER JOIN tblProducts p ON p.ProductId = ps.ProductID
           WHERE ps.ProductStock <> 0
-            AND (@storeId = 0 OR ps.StoreID = @storeId)
+            AND (@allStores = 1 OR ps.StoreID = @storeId)
             AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)`,
         pageSql: `
           WITH numbered AS (
@@ -1083,14 +1101,14 @@ app.get('/api/reports', requireAuth, async (req, res) => {
             INNER JOIN tblProducts p ON p.ProductId = ps.ProductID
             INNER JOIN tblStores s ON s.StoreID = ps.StoreID
             WHERE ps.ProductStock <> 0
-              AND (@storeId = 0 OR ps.StoreID = @storeId)
+              AND (@allStores = 1 OR ps.StoreID = @storeId)
               AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)
           )
           SELECT storeId, id, storeName, code, name, qty, totalRows
           FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
       }
     };
-    const scopedStore = Number.isFinite(storeId) && storeId > 0;
+    const scopedStore = store != null;
     const storeSales = `
       WITH scoped AS (
         SELECT
@@ -1980,21 +1998,21 @@ app.get('/api/purchases/:id', requireAuth, async (req, res) => {
 app.get('/api/stock', requireAuth, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim().slice(0, 80);
-    const storeId = Number(req.query.storeId || 0);
+    const store = chosenStore(req.query.storeId);
     const { page, pageSize, start, end } = paging(req);
     if (q && page === 1) recordActivity(req, { action: 'search', detail: `استعلام مخزون: ${q}` });
-    const safeStoreId = Number.isFinite(storeId) ? storeId : 0;
     const filters = [
       { name: 'q', type: sql.NVarChar(80), value: q },
       { name: 'like', type: sql.NVarChar(90), value: likeOf(q) },
-      { name: 'storeId', type: sql.Int, value: safeStoreId }
+      { name: 'storeId', type: sql.Int, value: store == null ? 0 : store },
+      { name: 'allStores', type: sql.Int, value: store == null ? 1 : 0 }
     ];
     const where = `
       FROM tblProductsStores ps
       INNER JOIN tblProducts p ON p.ProductId = ps.ProductID
       INNER JOIN tblStores s ON s.StoreID = ps.StoreID
       WHERE ps.ProductStock <> 0
-        AND (@storeId = 0 OR ps.StoreID = @storeId)
+        AND (@allStores = 1 OR ps.StoreID = @storeId)
         AND (@q = N'' OR p.ProductCode LIKE @like OR p.ProductName LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)`;
     const pageSql = start === 1
       ? `SELECT TOP (@pageSize)
@@ -2027,7 +2045,7 @@ app.get('/api/stock', requireAuth, async (req, res) => {
         { name: 'start', type: sql.Int, value: start },
         { name: 'end', type: sql.Int, value: end }
       ])),
-      cached(`stock:${safeStoreId}:${q}`, 20000, async () => {
+      cached(`stock:${store == null ? 'all' : store}:${q}`, 20000, async () => {
         const count = await runQuery(`SELECT COUNT(*) AS total ${where}`, filters);
         return Number(count[0].total);
       })
@@ -2087,7 +2105,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
   const storeId = Number(req.body.storeId);
   const notes = String(req.body.notes || '').slice(0, 250);
   const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
-  if (!storeId || !lines.length) return res.status(400).json({ error: 'اختر المخزن وأضف صنفاً واحداً على الأقل' });
+  if (!Number.isFinite(storeId) || storeId < 0 || !lines.length) return res.status(400).json({ error: 'اختر المخزن وأضف صنفاً واحداً على الأقل' });
 
   const cleanLines = [];
   for (const line of lines) {
@@ -2352,7 +2370,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
   const storeId = Number(req.body.storeId);
   const notes = String(req.body.notes || '').slice(0, 250);
   const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
-  if (!storeId || !lines.length) return res.status(400).json({ error: 'اختر المخزن وأضف صنفاً واحداً على الأقل' });
+  if (!Number.isFinite(storeId) || storeId < 0 || !lines.length) return res.status(400).json({ error: 'اختر المخزن وأضف صنفاً واحداً على الأقل' });
 
   const cleanLines = [];
   for (const line of lines) {
@@ -3405,7 +3423,7 @@ app.post('/api/sales/:id/return', requireAuth, async (req, res) => {
       if (!source) throw new Error('سطر الفاتورة غير موجود');
       const left = Number(source.qty) - Number(source.returned);
       if (item.qty > left + 0.00001) throw new Error('كمية المرتجع أكبر من المتبقي على الفاتورة');
-      if (!source.storeId || !source.rowGuid) throw new Error('سطر الفاتورة لا يمكن إرجاعه');
+      if (source.storeId == null || source.storeId === '' || !source.rowGuid) throw new Error('سطر الفاتورة لا يمكن إرجاعه');
       const total = Math.round(item.qty * Number(source.price) * 10000) / 10000;
       clean.push({ ...source, returnQty: item.qty, total });
     }
@@ -3630,7 +3648,7 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
       if (!source) throw new Error('سطر الفاتورة غير موجود');
       const left = Number(source.qty) - Number(source.returned);
       if (item.qty > left + 0.00001) throw new Error('كمية المرتجع أكبر من المتبقي على الفاتورة');
-      if (!source.storeId || !source.rowGuid) throw new Error('سطر الفاتورة لا يمكن إرجاعه');
+      if (source.storeId == null || source.storeId === '' || !source.rowGuid) throw new Error('سطر الفاتورة لا يمكن إرجاعه');
       const total = Math.round(item.qty * Number(source.price) * 10000) / 10000;
       clean.push({ ...source, returnQty: item.qty, total });
     }

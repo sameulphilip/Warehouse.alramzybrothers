@@ -16,8 +16,11 @@
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
+html { max-width: 100%; overflow-x: hidden; }
 body {
   margin: 0;
+  max-width: 100%;
+  overflow-x: hidden;
   font-family: "IBM Plex Sans Arabic", "Segoe UI", Tahoma, sans-serif;
   color: var(--ink);
   background: var(--bg);
@@ -188,13 +191,60 @@ main { padding: 20px 24px 32px; max-width: 1440px; min-width: 0; }
 .range.report-types button { flex: 1 1 0; min-width: max-content; white-space: nowrap; }
 .dash-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
 .dash-tools .range { margin-bottom: 0; flex: 1 1 16rem; }
-.dash-tools select { width: auto; min-width: min(100%, 11rem); margin: 0; flex: 1 1 11rem; }
+.dash-tools select { width: auto; min-width: min(100%, 11rem); margin: 0; flex: 0 0 auto; }
 .kpi.clickable { cursor: pointer; }
 .kpi.clickable:hover { border-color: #1b2559; }
 .kpis.kpis-home { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .kpi-balance { background: #f7f9fd; }
 .kpi em.up { color: var(--ok); font-weight: 700; }
 .kpi em.down { color: var(--red); font-weight: 700; }
+.dash { display: grid; gap: 14px; }
+.dash > * { min-width: 0; }
+.dash .range, .dash .kpis, .dash .chart-scroll, .dash .panel { min-width: 0; max-width: 100%; }
+.dash .dash-tools {
+  margin: 0;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid var(--edge);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  align-items: flex-end;
+}
+.dash .range { flex: 1 1 18rem; gap: 4px; padding: 4px; background: var(--bg); border-radius: 12px; flex-wrap: nowrap; }
+.dash .range button { flex: 1 1 0; min-width: 0; min-height: 40px; padding-inline: 8px; background: transparent; border-color: transparent; white-space: nowrap; }
+.dash .range button.active { background: #fff; color: var(--ink); border-color: var(--edge); box-shadow: 0 1px 2px rgba(27, 37, 89, 0.08); }
+.dash-store { display: flex; flex-direction: column; gap: 4px; flex: 0 1 16rem; min-width: min(100%, 12rem); color: var(--muted); font-size: 0.72rem; font-weight: 700; }
+.dash-store select { width: 100%; height: 40px; min-height: 40px; margin: 0; flex: none; }
+.dash-date { display: flex; flex-direction: column; gap: 4px; flex: 1 1 9rem; min-width: min(100%, 9rem); margin: 0; color: var(--muted); font-size: 0.72rem; font-weight: 700; }
+.dash-date input { width: 100%; height: 40px; min-height: 40px; margin: 0; }
+.dash .dash-tools > button { flex: 0 0 auto; align-self: flex-end; min-height: 40px; }
+.dash .kpis { gap: 12px; }
+.dash .kpi { position: relative; min-height: 132px; padding: 16px 16px 14px; border-radius: 14px; overflow: hidden; transition: border-color 0.15s ease, transform 0.15s ease; }
+.dash .kpi::before { content: ""; position: absolute; inset-inline: 16px; top: 0; height: 3px; border-radius: 0 0 3px 3px; background: #1b2559; }
+.dash .kpi-balance { background: #fff; }
+.dash .kpi-balance::before { background: var(--red); }
+.dash .kpi-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dash .kpi-top .ico { width: 28px; height: 28px; margin: 0; border-radius: 8px; background: #eef2fb; color: #1b2559; place-items: center; }
+.dash .kpi-balance .kpi-top .ico { background: #fdecec; color: var(--red-dark); }
+.dash .kpi-top .ico svg { width: 16px; height: 16px; }
+.dash .kpi-top span { min-width: 0; line-height: 1.35; }
+.dash .kpi strong { margin-top: 12px; font-size: clamp(1.15rem, 1.5vw, 1.6rem); }
+.dash .kpi.clickable:hover { border-color: #c5d0e6; transform: translateY(-1px); }
+.dash .kpi.clickable:active { transform: translateY(0); }
+.dash .panel, .dash .split .panel { margin-top: 0; border-radius: 14px; }
+.dash .panel h3 { min-height: 52px; }
+.dash .split { align-items: stretch; }
+.dash .split > .panel { display: flex; flex-direction: column; height: 100%; }
+.dash .split > .panel > .panel-note { min-height: 2.7rem; }
+.dash .split > .panel > .data { flex: 1 1 auto; }
+.dash .chart-peak { background: var(--bg); border-radius: 999px; padding: 4px 10px; }
+.dash .bars { height: 220px; border-bottom: 1px solid var(--line); }
+.dash .bar span { max-width: 16px; border-radius: 6px 6px 2px 2px; background: #24356f; }
+.dash .bar.is-peak span { background: #1b2559; }
+.dash .bar.is-today span { background: var(--red); }
+.dash .panel-watch { border-color: #f0d3b0; }
+.dash .panel-watch h3 { color: #8a4b08; }
+.dash > .panel-note { margin: 0; color: var(--muted); font-size: 0.82rem; line-height: 1.6; }
 .chart-peak { margin-inline-start: auto; color: var(--muted); font-size: 0.82rem; font-weight: 600; }
 .report-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin-bottom: 8px; }
 .report-filters label { margin: 0; font-size: 0.82rem; font-weight: 600; flex: 1 1 9rem; min-width: 0; }
@@ -348,16 +398,21 @@ main > .panel-note { margin: 8px 2px 12px; padding: 0; color: var(--muted); font
   .login-card { padding: 18px 18px 16px; }
   .login-card h2 { font-size: 1.35rem; margin-bottom: 12px; }
   .kpis, .kpis-period, .kpis-balance { grid-template-columns: 1fr 1fr; }
+  .kpis.kpis-home, .chart-scroll, .range.report-types { max-width: 100%; }
   .kpis.kpis-home { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .kpi strong { font-size: 1.15rem; }
   .split { grid-template-columns: 1fr; }
   .bars { height: 168px; gap: 4px; padding-inline: 10px; grid-template-columns: repeat(var(--bars, 14), minmax(3.1rem, 1fr)); min-width: max(100%, calc(var(--bars, 14) * 3.1rem)); }
   .chart-peak { flex-basis: 100%; margin-inline-start: 0; }
-  .dash-tools select { width: 100%; flex-basis: 100%; }
+  .dash-tools .dash-store { flex-basis: 100%; min-width: 0; }
   .toolbar > input, .toolbar > select, .sale-form .toolbar > input, .sale-form .toolbar > select { flex: 1 1 calc(50% - 8px); }
-  .toolbar > button, .sale-form .toolbar > button, .toolbar > .checkline, .toolbar > .paid-amount { flex: 1 1 100%; }
+  .toolbar > button, .sale-form .toolbar > button { flex: 1 1 0; min-width: 7.5rem; }
+  .toolbar > .checkline, .toolbar > .paid-amount { flex: 1 1 100%; }
   .report-filters label { flex: 1 1 calc(50% - 8px); }
-  .report-filters .report-search, .report-filters button { flex-basis: 100%; }
+  .report-filters .report-search { flex-basis: 100%; }
+  .report-filters button { flex: 1 1 0; min-width: 7.5rem; }
+  .range.report-types { min-width: 0; scroll-snap-type: inline mandatory; }
+  .range.report-types button { flex: 0 0 auto; scroll-snap-align: start; }
   .shell { grid-template-columns: 1fr; padding: 0; gap: 0; }
   .side {
     position: fixed;
@@ -379,7 +434,8 @@ main > .panel-note { margin: 8px 2px 12px; padding: 0; color: var(--muted); font
     gap: 8px;
   }
   .top > div { gap: 0; }
-  .top h2 { font-size: 1.02rem; }
+  .top h2 { flex: 1 1 auto; font-size: 1.02rem; overflow: hidden; }
+  .top h2 span { display: block; overflow: hidden; text-overflow: ellipsis; }
   .top p { display: none; }
   .top #who { max-width: 42%; overflow: hidden; text-overflow: ellipsis; background: var(--bg); }
   .data, .split > .panel > .data, .line-grid { max-height: none; overflow: visible; background: transparent; box-shadow: none; border: 0; }
@@ -407,24 +463,42 @@ main > .panel-note { margin: 8px 2px 12px; padding: 0; color: var(--muted); font
   .data-row span.num { text-align: start; justify-content: flex-start; }
   .neg, .due, .ok { width: max-content; }
   .data-row span::before { content: attr(data-label); color: var(--muted); font-size: 0.72rem; font-weight: 600; }
-  .data-row.product-card {
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    padding: 14px;
-    border-radius: var(--radius);
-  }
-  .data-row.product-card span:nth-child(1),
-  .data-row.product-card span:nth-child(2) { grid-column: 1 / -1; }
-  .data-row.product-card span:nth-child(1) { font-size: 1.02rem; font-weight: 700; color: var(--ink); }
-  .data-row.product-card span:nth-child(n + 3) {
+  .data-row.product-card { gap: 8px; padding: 14px; }
+  .data-row.product-card span:first-child { font-size: 1.02rem; padding-bottom: 8px; }
+  .data-row.product-card span:nth-child(n + 2) {
     background: #f8fafd;
     border: 1px solid var(--line);
     border-radius: 10px;
     padding: 8px 10px;
-    min-height: 58px;
+    min-height: 54px;
   }
-  .data-row.product-card span:nth-child(3),
-  .data-row.product-card span:nth-child(4) { font-weight: 700; color: var(--ink); }
+  .data-row span:last-child:nth-child(even) { grid-column: 1 / -1; }
+  .data-row:has(span[data-label="المنتج"]) > span:first-child,
+  .data-row:has(span[data-label="الصنف"]) > span:first-child,
+  .data-row:has(span[data-label="العميل"]) > span:first-child,
+  .data-row:has(span[data-label="المورد"]) > span:first-child {
+    grid-column: auto;
+    font-weight: 600;
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+  .data-row > span[data-label="المنتج"],
+  .data-row > span[data-label="الصنف"],
+  .data-row > span[data-label="العميل"],
+  .data-row > span[data-label="المورد"] {
+    order: -1;
+    grid-column: 1 / -1;
+    font-weight: 700;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--line);
+  }
+  .data-row > span[data-label="حذف"] { grid-column: 1 / -1; }
+  .data-row > span[data-label="حذف"]::before { content: none; }
+  .column-picks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; }
+  .column-picks > span { grid-column: 1 / -1; }
+  .column-picks label { min-height: 44px; background: #f8fafd; border: 1px solid var(--line); border-radius: 10px; padding: 0 10px; }
+  .sheet-actions { grid-template-columns: 1fr 1fr; }
+  .sheet-actions .history-btn.primary { grid-column: 1 / -1; }
   #appView:not(.hidden) ~ .dock {
     display: grid;
     grid-template-columns: repeat(6, 1fr);
@@ -454,7 +528,7 @@ main > .panel-note { margin: 8px 2px 12px; padding: 0; color: var(--muted); font
     min-width: 0;
     overflow: hidden;
   }
-  .dock button em { font-style: normal; display: -webkit-box; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: normal; line-height: 1.2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .dock button em { font-style: normal; display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.15; }
   .data-row span.lead, .line-grid .data-row span:first-child { display: flex; -webkit-line-clamp: unset; white-space: normal; overflow: visible; }
   .dock .ico { width: 18px; height: 18px; }
   .dock button.active { background: #f8e8e7; color: var(--red); }
@@ -467,12 +541,13 @@ main > .panel-note { margin: 8px 2px 12px; padding: 0; color: var(--muted); font
 }
 
 @media (max-width: 520px) {
-  .kpis, .kpis-period, .kpis-balance { grid-template-columns: 1fr; }
-  .kpis.kpis-home { grid-template-columns: repeat(4, minmax(9.5rem, 1fr)); overflow-x: auto; }
-  .toolbar > input, .toolbar > select, .sale-form .toolbar > input, .sale-form .toolbar > select, .report-filters label { flex-basis: 100%; }
-  .data-row { grid-template-columns: 1fr; }
-  .data-row.product-card { grid-template-columns: 1fr 1fr; }
-  .dash-tools .range { flex-basis: 100%; }
+  .kpis, .kpis-period, .kpis-balance { grid-template-columns: 1fr 1fr; }
+  .kpis.kpis-home { grid-auto-flow: column; grid-auto-columns: minmax(8.4rem, 1fr); grid-template-columns: none; overflow-x: auto; }
+  .toolbar > input, .toolbar > select, .sale-form .toolbar > input, .sale-form .toolbar > select { flex-basis: 100%; }
+  .report-filters label:not(:has(input[type="date"])) { flex-basis: 100%; }
+  .report-filters label:has(input[type="date"]) { flex-basis: calc(50% - 8px); }
+  .dash-date { flex-basis: calc(50% - 8px); }
+  .dash .dash-tools > button { flex-basis: 100%; }
   .login-wrap { padding: 0; }
   .login-brand p { display: none; }
   .top #who { max-width: 36%; font-size: 0.75rem; padding-inline: 8px; }
@@ -489,7 +564,7 @@ main > .panel-note { margin: 8px 2px 12px; padding: 0; color: var(--muted); font
 
 @media print {
   @page { size: A4; margin: 12mm 12mm 14mm; }
-  html, body { background: #fff !important; color: #1b2559; }
+  html, body { background: #fff !important; color: #1b2559; overflow: visible !important; max-width: none !important; }
   .side, .top, .dock, .scrim, .drawer, .column-picks, .report-types, .report-filters, .party-box, .panel-note, .kpis, .data, .meta, .pager { display: none !important; }
   .shell { display: block; background: #fff; min-height: 0; }
   .workspace, main { display: block; background: #fff; min-height: 0; max-width: none; padding: 0; }

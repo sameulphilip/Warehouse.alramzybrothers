@@ -13,7 +13,8 @@ const icons = {
   stores: svg('<path d="M3 10l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>'),
   accounts: svg('<path d="M12 3l7 3v6c0 4.2-2.8 7.4-7 8.5C7.8 19.4 5 16.2 5 12V6l7-3z"/><path d="M9 12l2 2 4-4"/>'),
   activity: svg('<circle cx="12" cy="12" r="8"/><path d="M12 8v5l3 2"/>'),
-  logout: svg('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>')
+  logout: svg('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>'),
+  more: svg('<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>')
 };
 const icon = (name) => `<span class="ico">${icons[name] || ''}</span>`;
 
@@ -33,7 +34,7 @@ const sections = [
   { id: 'accounts', label: 'إدارة الحسابات', title: 'إدارة الحسابات', subtitle: 'حسابات الدخول وصلاحيات المديرين', admin: true }
 ];
 
-const state = { section: 'dashboard', page: 1, q: '', storeId: '0', dashStore: '0', stores: [], user: null, range: '1', report: null, readOnly: false };
+const state = { section: 'dashboard', page: 1, q: '', storeId: '', dashStore: '', dashFrom: '', dashTo: '', stores: [], user: null, report: null, readOnly: false };
 
 function visibleSections() {
   return sections.filter((section) => !section.admin || state.user?.role === 'superadmin');
@@ -130,6 +131,11 @@ function renderNav() {
     button.classList.toggle('active', button.dataset.id === state.section);
     button.onclick = () => open(button.dataset.id);
   });
+  const more = document.getElementById('moreBtn');
+  if (more) {
+    if (!more.dataset.label) more.dataset.label = more.textContent.trim();
+    more.innerHTML = `${icon('more')}<em>${more.dataset.label}</em>`;
+  }
 }
 
 function closeMenu() {
@@ -161,7 +167,7 @@ async function openSection(id) {
   try {
     if (id === 'dashboard') {
       if (!state.stores.length) state.stores = (await api('/api/stores')).stores;
-      return renderDashboard(await api(`/api/dashboard?range=${state.range || '1'}&storeId=${state.dashStore || '0'}`));
+      return renderDashboard(await api(`/api/dashboard?from=${encodeURIComponent(state.dashFrom || '')}&to=${encodeURIComponent(state.dashTo || '')}&storeId=${encodeURIComponent(state.dashStore ?? '')}`));
     }
     if (id === 'reports') {
       if (!state.stores.length) state.stores = (await api('/api/stores')).stores;
@@ -280,7 +286,7 @@ function ensureReport() {
       type: 'sales',
       from: isoDate(new Date(today.getFullYear(), today.getMonth(), 1)),
       to: isoDate(today),
-      storeId: '0',
+      storeId: '',
       partyId: 0,
       partyName: ''
     };
@@ -294,7 +300,7 @@ function reportUrl() {
     type: report.type,
     from: report.from,
     to: report.to,
-    storeId: report.storeId || '0',
+    storeId: report.storeId ?? '',
     partyId: String(report.partyId || 0),
     q: state.q,
     page: String(state.page),
@@ -506,7 +512,7 @@ function renderReports(data) {
   const startRow = data.total ? ((data.page || state.page) - 1) * (data.pageSize || 30) + 1 : 0;
   const endRow = Math.min((data.page || state.page) * (data.pageSize || 30), data.total);
   const pickedStore = state.stores.find((store) => String(store.id) === String(report.storeId));
-  const storeName = pickedStore && String(report.storeId) !== '0' ? pickedStore.name : '';
+  const storeName = report.storeId !== '' && pickedStore ? pickedStore.name : '';
   const printedAt = new Date().toLocaleString('ar-EG-u-nu-latn', { dateStyle: 'medium', timeStyle: 'short' });
   const shownCards = data.needsParty ? [] : cards;
   const partyBits = [];
@@ -531,9 +537,7 @@ function renderReports(data) {
   const printBody = rows.length
     ? rows.map((row) => `<tr>${row.cells.map((cell, index) => `<td class="${numericLabels.has(columns[index].label) ? 'num' : ''}">${cell}</td>`).join('')}</tr>`).join('')
     : `<tr><td class="print-empty" colspan="${columns.length}">${data.needsParty ? 'اختَر السجل أولاً' : 'لا توجد نتائج'}</td></tr>`;
-  const storeOptions = ['<option value="0">كل المخازن</option>'].concat(state.stores.map((store) =>
-    `<option value="${store.id}" ${String(store.id) === String(report.storeId) ? 'selected' : ''}>${esc(store.name)}</option>`
-  )).join('');
+  const storeOptions = allStoreOptions(report.storeId);
   const storeFilter = ['sales', 'purchases', 'products', 'stock', 'productMove'].includes(data.type);
   content.innerHTML = `
     <article class="print-sheet">
@@ -694,7 +698,6 @@ function renderDashboard(data) {
   const salesDelta = periodDelta(month.sales, month.prevSales);
   const buyDelta = periodDelta(month.purchases, month.prevPurchases);
   const peak = Math.max(...data.days.map((day) => Number(day.total)), 0);
-  const ranges = [['1', 'هذا الشهر'], ['3', '3 شهور'], ['6', '6 شهور'], ['12', 'سنة']];
   const periodCards = [
     { type: 'sales', label: 'مبيعات الفترة', value: kpiMoney(month.sales), note: `${num(month.saleCount)} فاتورة · ${salesDelta.text}`, dir: salesDelta.dir },
     { type: 'purchases', label: 'مشتريات الفترة', value: kpiMoney(month.purchases), note: `${num(month.purchaseCount)} فاتورة · ${buyDelta.text}`, dir: buyDelta.dir }
@@ -709,20 +712,18 @@ function renderDashboard(data) {
     const label = data.monthly ? day.day.slice(5) : day.day.slice(8);
     const show = data.monthly || data.days.length <= 16 || index % Math.ceil(data.days.length / 8) === 0 || index === data.days.length - 1;
     const isPeak = peak > 0 && total === peak;
-    const isLast = index === data.days.length - 1;
-    const amount = total > 0 && (data.monthly || isPeak || isLast) ? kpiMoney(total) : '';
-    return `<div class="bar${isLast ? ' is-today' : ''}${isPeak ? ' is-peak' : ''}" title="${day.day} · ${money(total)}"><b>${amount}</b><span style="height:${Math.max(height, total > 0 ? 8 : 2)}%"></span><em>${show ? label : ''}</em></div>`;
+    const isToday = data.monthly ? day.day === String(data.today || '').slice(0, 7) : day.day === String(data.today || '').slice(0, 10);
+    const amount = total > 0 && (data.monthly || isPeak || isToday) ? kpiMoney(total) : '';
+    return `<div class="bar${isToday ? ' is-today' : ''}${isPeak ? ' is-peak' : ''}" title="${day.day} · ${money(total)}"><b>${amount}</b><span style="height:${Math.max(height, total > 0 ? 8 : 2)}%"></span><em>${show ? label : ''}</em></div>`;
   }).join('');
-  const storeOptions = ['<option value="0">كل المخازن</option>'].concat(state.stores.map((store) =>
-    `<option value="${store.id}" ${String(store.id) === String(state.dashStore) ? 'selected' : ''}>${esc(store.name)}</option>`
-  )).join('');
+  const storeOptions = allStoreOptions(state.dashStore);
   const top = grid(
     [
-      { label: 'المنتج', width: '1.6fr' },
-      { label: 'رقم الصنف', width: '0.7fr' },
-      { label: 'الكود', width: '0.8fr' },
-      { label: 'الكمية', width: '0.6fr' },
-      { label: 'الإجمالي', width: '0.8fr' }
+      { label: 'المنتج', width: '2.8fr' },
+      { label: 'رقم الصنف', width: '1.2fr' },
+      { label: 'الكود', width: '1.4fr' },
+      { label: 'الكمية', width: '1.8fr' },
+      { label: 'الإجمالي', width: '2.8fr' }
     ],
     data.topProducts.map((row) => ({
       clickable: true,
@@ -732,12 +733,12 @@ function renderDashboard(data) {
   );
   const low = grid(
     [
-      { label: 'المنتج', width: '1.4fr' },
-      { label: 'رقم الصنف', width: '0.7fr' },
-      { label: 'الكود', width: '0.8fr' },
-      { label: 'المخزن', width: '0.9fr' },
-      { label: 'الرصيد', width: '0.5fr' },
-      { label: 'حد الطلب', width: '0.6fr' }
+      { label: 'المنتج', width: '2.8fr' },
+      { label: 'رقم الصنف', width: '1.2fr' },
+      { label: 'الكود', width: '1.4fr' },
+      { label: 'المخزن', width: '1.8fr' },
+      { label: 'الرصيد', width: '1.4fr' },
+      { label: 'حد الطلب', width: '1.4fr' }
     ],
     data.lowStock.map((row) => ({
       clickable: true,
@@ -762,32 +763,36 @@ function renderDashboard(data) {
       classes: ['', '', '', '', '', Number(row.due) > 0 ? 'due' : 'ok']
     }))
   );
-  const kpi = (card, balance) => `<article class="kpi clickable${balance ? ' kpi-balance' : ''}" data-open="${card.type}"><span>${card.label}</span><strong>${card.value}</strong><em class="${card.dir || ''}">${card.note}</em></article>`;
-  content.innerHTML = `<div class="dash-tools"><div class="range">${ranges.map(([id, label]) =>
-    `<button type="button" data-range="${id}" class="${data.range === id ? 'active' : ''}">${label}</button>`
-  ).join('')}</div><select id="dashStore" aria-label="المخزن">${storeOptions}</select></div>
-  <div class="kpis kpis-home">${periodCards.map((card) => kpi(card, false)).join('')}${balanceCards.map((card) => kpi(card, true)).join('')}</div>
-  <p class="panel-note">كرتا المتبقي لكل الفروع، وفلتر المخزن لا يغيّرهما.</p>
-  <section class="panel"><h3><span>${data.monthly ? 'المبيعات شهرياً' : 'المبيعات يومياً'}</span>${peak ? `<span class="chart-peak">أعلى قيمة ${money(peak)}</span>` : ''}</h3><div class="chart-scroll"><div class="bars" style="--bars:${data.days.length}">${bars}</div></div></section>
-  <div class="split">
-    <section class="panel"><h3><span>أعلى المبيعات</span></h3>${top}</section>
-    <section class="panel"><h3><span>تحت حد الطلب</span></h3><p class="panel-note">يظهر الصنف عندما يصبح الرصيد 10% أو أقل. مثال: 100 قطعة تظهر عند 10.</p>${low}</section>
+  const kpiIcon = { sales: 'sales', purchases: 'purchases', clients: 'clients', suppliers: 'suppliers' };
+  const kpi = (card, balance) => `<article class="kpi clickable${balance ? ' kpi-balance' : ''}" data-open="${card.type}"><div class="kpi-top">${icon(kpiIcon[card.type] || 'sales')}<span>${card.label}</span></div><strong>${card.value}</strong><em class="${card.dir || ''}">${card.note}</em></article>`;
+  content.innerHTML = `<div class="dash">
+  <div class="dash-tools">
+    <label class="dash-date">من<input id="dashFrom" type="date" value="${esc(data.month.start)}"></label>
+    <label class="dash-date">إلى<input id="dashTo" type="date" value="${esc(data.month.end)}"></label>
+    <button id="dashGo" type="button">عرض</button>
+    <label class="dash-store">المخزن<select id="dashStore">${storeOptions}</select></label>
   </div>
-  <section class="panel"><h3><span>آخر فواتير البيع</span></h3>${recent}</section>`;
+  <div class="kpis kpis-home">${periodCards.map((card) => kpi(card, false)).join('')}${balanceCards.map((card) => kpi(card, true)).join('')}</div>
+  <p class="panel-note">كرتا المتبقي لكل الفروع، وفلتر المخزن لا يغيّرهما. اضغط أي كارت لفتح تقريره.</p>
+  <section class="panel dash-chart"><h3><span>${data.monthly ? 'المبيعات شهرياً' : 'المبيعات يومياً'}</span>${peak ? `<span class="chart-peak">أعلى قيمة ${money(peak)}</span>` : ''}</h3><div class="chart-scroll"><div class="bars" style="--bars:${data.days.length}">${bars}</div></div></section>
+  <div class="split">
+    <section class="panel"><h3><span>أعلى المبيعات</span></h3><p class="panel-note">أكثر الأصناف مبيعاً في الفترة والمخزن المختارين.</p>${top}</section>
+    <section class="panel panel-watch"><h3><span>تحت حد الطلب</span></h3><p class="panel-note">يظهر الصنف عندما يصبح الرصيد 10% أو أقل. مثال: 100 قطعة تظهر عند 10.</p>${low}</section>
+  </div>
+  <section class="panel"><h3><span>آخر فواتير البيع</span></h3>${recent}</section>
+  </div>`;
   bindRows('sales');
   content.querySelectorAll('[data-product]').forEach((row) => {
     row.onclick = () => openProductForm(row.dataset.product);
   });
-  content.querySelectorAll('.range button').forEach((button) => {
-    button.onclick = () => {
-      state.range = button.dataset.range;
-      openSection('dashboard');
-    };
-  });
-  document.getElementById('dashStore').onchange = () => {
+  const applyDash = () => {
+    state.dashFrom = document.getElementById('dashFrom').value;
+    state.dashTo = document.getElementById('dashTo').value;
     state.dashStore = document.getElementById('dashStore').value;
     openSection('dashboard');
   };
+  document.getElementById('dashGo').onclick = applyDash;
+  document.getElementById('dashStore').onchange = applyDash;
   const chart = content.querySelector('.chart-scroll');
   if (chart && chart.scrollWidth > chart.clientWidth + 8) {
     chart.scrollLeft = document.dir === 'rtl' ? -chart.scrollWidth : chart.scrollWidth;
@@ -798,7 +803,7 @@ function renderDashboard(data) {
       report.type = card.dataset.open;
       report.from = data.month.start;
       report.to = data.month.end;
-      report.storeId = ['sales', 'purchases', 'products'].includes(card.dataset.open) ? String(state.dashStore || '0') : '0';
+      report.storeId = ['sales', 'purchases', 'products'].includes(card.dataset.open) ? String(state.dashStore ?? '') : '';
       state.page = 1;
       state.q = '';
       openSection('reports');
@@ -1288,9 +1293,7 @@ function renderInvoices(kind, data, party) {
 }
 
 function renderStock(data) {
-  const options = ['<option value="0">كل المخازن</option>']
-    .concat(state.stores.map((store) => `<option value="${store.id}" ${String(store.id) === String(state.storeId) ? 'selected' : ''}>${esc(store.name)}</option>`))
-    .join('');
+  const options = allStoreOptions(state.storeId);
   const pages = Math.max(1, Math.ceil(data.total / 40));
   const rows = grid(
     [
@@ -1365,6 +1368,14 @@ function resetPurchaseDraft() {
   purchaseDraft.partial = 0;
   purchaseDraft.storeId = null;
   purchaseDraft.hold = false;
+}
+
+function allStoreOptions(selected) {
+  const current = selected == null ? '' : String(selected);
+  const mark = (value) => value === current ? ' selected' : '';
+  return `<option value=""${mark('')}>كل المخازن</option>${state.stores.map((store) =>
+    `<option value="${store.id}"${mark(String(store.id))}>${esc(store.name)}</option>`
+  ).join('')}`;
 }
 
 function storeOptions(selected) {
