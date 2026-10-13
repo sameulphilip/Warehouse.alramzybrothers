@@ -1353,6 +1353,14 @@ function roundTo(value, digits) {
   return Math.round(n * factor) / factor;
 }
 
+function applyDiscount(gross, raw, fallback = 0) {
+  const source = raw == null || raw === '' ? fallback : raw;
+  const discount = roundTo(source, 4);
+  if (discount == null || discount < 0) return { error: 'الخصم لازم يكون صفراً أو أكثر' };
+  if (discount > gross + 0.0001) return { error: 'الخصم أكبر من إجمالي الأصناف' };
+  return { discount, net: roundTo(gross - discount, 4), type: discount > 0.0001 ? 1 : 0 };
+}
+
 function paymentAmount(body, total) {
   const totalAmount = roundTo(total, 4);
   if (!body || !body.paid) return { amount: 0 };
@@ -1874,6 +1882,8 @@ app.get('/api/sales/:id', requireAuth, async (req, res) => {
         si.ClientID AS clientId,
         si.SellingInvoiceDate AS date,
         ISNULL(c.ClientName, N'') AS name,
+        ISNULL(si.TotalProductsPrice, 0) AS products,
+        ISNULL(si.TotalDiscountAmount, 0) AS discount,
         ISNULL(si.SellingInvoiceTotalAmount, 0) AS total,
         ISNULL(si.TotalCollectedAmount, 0) AS paid,
         ISNULL(si.NotCollectedAmount, 0) AS due,
@@ -1959,6 +1969,8 @@ app.get('/api/purchases/:id', requireAuth, async (req, res) => {
         pi.SupplierID AS supplierId,
         pi.PurchaseInvoiceDate AS date,
         ISNULL(s.SupplierName, N'') AS name,
+        ISNULL(pi.TotalProductsPrice, 0) AS products,
+        ISNULL(pi.TotalDiscountAmount, 0) AS discount,
         ISNULL(pi.PurchaseInvoiceTotalAmount, 0) AS total,
         ISNULL(pi.TotalPaiedAmount, 0) AS paid,
         ISNULL(pi.NotPaiedAmount, 0) AS due,
@@ -2117,7 +2129,10 @@ app.post('/api/sales', requireAuth, async (req, res) => {
     }
     cleanLines.push({ productId, qty, price, total: Math.round(qty * price * 10000) / 10000 });
   }
-  const invoiceTotal = Math.round(cleanLines.reduce((sum, line) => sum + line.total, 0) * 10000) / 10000;
+  const gross = roundTo(cleanLines.reduce((sum, line) => sum + line.total, 0), 4);
+  const priced = applyDiscount(gross, req.body.discount);
+  if (priced.error) return res.status(400).json({ error: priced.error });
+  const invoiceTotal = priced.net;
   if (!(invoiceTotal > 0)) return res.status(400).json({ error: 'إجمالي الفاتورة لازم يكون أكبر من صفر' });
   const pay = paymentAmount(req.body, invoiceTotal);
   if (pay.error) return res.status(400).json({ error: pay.error });
@@ -2198,7 +2213,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
          TotalOnCollectDiscount, Notes, Posted, JournalEntryID, PeriodID, BranchId,
          SellingInvoiceTypeId, SalesRepId, InsertedDate, InsertedBy)
       VALUES
-        (@no, @clientId, CAST(@date AS datetime), @total, 0, 0, 0, 0, 0, @total,
+        (@no, @clientId, CAST(@date AS datetime), @gross, 0, @dtype, 0, @discount, @discount, @total,
          0, 0, 0, 0, 0, 0, @total, 0, 1, @collected, 0, 0, @notes, 1, @journalId, 1, 0,
          @typeId, 0, GETDATE(), @actor);
       SELECT SCOPE_IDENTITY() AS id;
@@ -2206,6 +2221,9 @@ app.post('/api/sales', requireAuth, async (req, res) => {
       { name: 'no', type: sql.Numeric(18, 0), value: invoiceNo },
       { name: 'clientId', type: sql.Numeric(18, 0), value: client.ClientId || 0 },
       { name: 'date', type: sql.NVarChar(10), value: businessDay() },
+      { name: 'gross', type: sql.Numeric(18, 4), value: gross },
+      { name: 'discount', type: sql.Numeric(18, 4), value: priced.discount },
+      { name: 'dtype', type: sql.Int, value: priced.type },
       { name: 'total', type: sql.Numeric(18, 4), value: invoiceTotal },
       { name: 'collected', type: sql.Numeric(18, 4), value: collected },
       { name: 'notes', type: sql.NVarChar(250), value: notes },
@@ -2382,7 +2400,10 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
     }
     cleanLines.push({ productId, qty, price, total: Math.round(qty * price * 10000) / 10000 });
   }
-  const invoiceTotal = Math.round(cleanLines.reduce((sum, line) => sum + line.total, 0) * 10000) / 10000;
+  const gross = roundTo(cleanLines.reduce((sum, line) => sum + line.total, 0), 4);
+  const priced = applyDiscount(gross, req.body.discount);
+  if (priced.error) return res.status(400).json({ error: priced.error });
+  const invoiceTotal = priced.net;
   if (!(invoiceTotal > 0)) return res.status(400).json({ error: 'إجمالي الفاتورة لازم يكون أكبر من صفر' });
   const pay = paymentAmount(req.body, invoiceTotal);
   if (pay.error) return res.status(400).json({ error: pay.error });
@@ -2458,7 +2479,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
          ReturnedAmount, TotalOnPaiedDiscount, Notes, PurchaseRepId, Posted, JournalEntryID, PeriodID, BranchId,
          PurchaseInvoiceTypeId, InsertedDate, InsertedBy)
       VALUES
-        (@no, @ref, 0, 0, @supplierId, CAST(@date AS datetime), @total, 0, 0, 0, 0, 0,
+        (@no, @ref, 0, 0, @supplierId, CAST(@date AS datetime), @gross, 0, @dtype, 0, @discount, @discount,
          @total, 0, 0, 0, 0, 0, 0, 0, @total, 0, 1, @collected,
          0, 0, @notes, 0, 1, @journalId, 1, 0, @typeId, GETDATE(), @actor);
       SELECT SCOPE_IDENTITY() AS id;
@@ -2467,6 +2488,9 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
       { name: 'ref', type: sql.NVarChar(50), value: String(invoiceNo) },
       { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
       { name: 'date', type: sql.NVarChar(10), value: businessDay() },
+      { name: 'gross', type: sql.Numeric(18, 4), value: gross },
+      { name: 'discount', type: sql.Numeric(18, 4), value: priced.discount },
+      { name: 'dtype', type: sql.Int, value: priced.type },
       { name: 'total', type: sql.Numeric(18, 4), value: invoiceTotal },
       { name: 'collected', type: sql.Numeric(18, 4), value: collected },
       { name: 'notes', type: sql.NVarChar(250), value: notes },
@@ -2702,6 +2726,201 @@ async function assertProduct(tx, productId) {
   if (!product.recordset[0]) throw new Error('أحد الأصناف غير موجود');
 }
 
+function partyInput(body) {
+  const name = String((body && body.name) || '').trim();
+  const phone = String((body && (body.phone || body.mobile)) || '').trim();
+  if (!name) return { error: 'الاسم مطلوب' };
+  if (name.length > 50) return { error: 'الاسم أطول من 50 حرفاً' };
+  if (phone.length > 20) return { error: 'رقم الهاتف أطول من 20 رقماً' };
+  return { name, phone };
+}
+
+async function createPartyAccount(tx, parentCode, id, name) {
+  const parent = (await txQuery(tx, `
+    SELECT AccCode, CurLevel, AccType, SubsDigits
+    FROM tblAccTree WITH (UPDLOCK, HOLDLOCK)
+    WHERE AccCode = @code
+  `, [{ name: 'code', type: sql.NVarChar(50), value: parentCode }])).recordset[0];
+  if (!parent) throw new Error('حساب المجموعة غير موجود');
+  const width = Number(parent.SubsDigits) - String(parent.AccCode).length;
+  if (width < 1 || String(id).length > width) throw new Error('تعذر توليد كود الحساب');
+  const code = `${parent.AccCode}${String(id).padStart(width, '0')}`;
+  const taken = await txQuery(tx, `SELECT AccountId FROM tblAccTree WHERE AccCode = @code`, [
+    { name: 'code', type: sql.NVarChar(50), value: code }
+  ]);
+  if (taken.recordset[0]) throw new Error('كود الحساب مستخدم');
+  await txQuery(tx, `
+    INSERT INTO tblAccTree
+      (AccCode, AccName, CurLevel, AccType, AccParent, AccCloseIn, HaveSub, AccDis, CompCode, StartDate, SubsDigits, RowGuid)
+    VALUES
+      (@code, @name, @level, @type, @parent, 1, 0, @name, 0, GETDATE(), @digits, NEWID())
+  `, [
+    { name: 'code', type: sql.NVarChar(50), value: code },
+    { name: 'name', type: sql.NVarChar(100), value: name },
+    { name: 'level', type: sql.Int, value: Number(parent.CurLevel) + 1 },
+    { name: 'type', type: sql.Int, value: Number(parent.AccType) },
+    { name: 'parent', type: sql.NVarChar(50), value: String(parent.AccCode) },
+    { name: 'digits', type: sql.Int, value: Number(parent.SubsDigits) + 1 }
+  ]);
+  return code;
+}
+
+app.post('/api/clients', requireAuth, async (req, res) => {
+  const item = partyInput(req.body);
+  if (item.error) return res.status(400).json({ error: item.error });
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const id = await nextNumber(tx, 'tblClients', 'ClientId');
+    const code = await createPartyAccount(tx, '122102', id, item.name);
+    await txQuery(tx, `
+      INSERT INTO tblClients
+        (ClientId, ClientName, SalesManId, RegionId, CountryID, AccCode, CategoryID, CompCode, PhoneNo, MobilNo)
+      VALUES (@id, @name, 0, 0, 0, @code, 0, 0, @phone, @phone)
+    `, [
+      { name: 'id', type: sql.Numeric(18, 0), value: id },
+      { name: 'name', type: sql.NVarChar(50), value: item.name },
+      { name: 'code', type: sql.NVarChar(200), value: code },
+      { name: 'phone', type: sql.NVarChar(20), value: item.phone }
+    ]);
+    await tx.commit();
+    recordActivity(req, { action: 'client', detail: `عميل جديد ${item.name}`, ref: `client:${id}` });
+    res.json({ id, name: item.name, phone: item.phone, accCode: code });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حفظ العميل' });
+  }
+});
+
+app.post('/api/suppliers', requireAuth, async (req, res) => {
+  const item = partyInput(req.body);
+  if (item.error) return res.status(400).json({ error: item.error });
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const id = await nextNumber(tx, 'tblSuppliers', 'SupplierID');
+    const code = await createPartyAccount(tx, '2421', id, item.name);
+    await txQuery(tx, `
+      INSERT INTO tblSuppliers
+        (SupplierID, SupplierName, CountryID, AccCode, CompCode, PhoneNo, MobilNo)
+      VALUES (@id, @name, 0, @code, 0, @phone, @phone)
+    `, [
+      { name: 'id', type: sql.Numeric(18, 0), value: id },
+      { name: 'name', type: sql.NVarChar(50), value: item.name },
+      { name: 'code', type: sql.NVarChar(200), value: code },
+      { name: 'phone', type: sql.NVarChar(20), value: item.phone }
+    ]);
+    await tx.commit();
+    recordActivity(req, { action: 'supplier', detail: `مورد جديد ${item.name}`, ref: `supplier:${id}` });
+    res.json({ id, name: item.name, phone: item.phone, accCode: code });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حفظ المورد' });
+  }
+});
+
+app.post('/api/transfers', requireAuth, async (req, res) => {
+  const fromStoreId = Number(req.body.fromStoreId);
+  const toStoreId = Number(req.body.toStoreId);
+  const notes = clip(req.body.notes, 250);
+  const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
+  if (!Number.isFinite(fromStoreId) || fromStoreId < 0 || !Number.isFinite(toStoreId) || toStoreId < 0) {
+    return res.status(400).json({ error: 'اختر المخزنين' });
+  }
+  if (fromStoreId === toStoreId) return res.status(400).json({ error: 'مخزن الخروج ومخزن الدخول لازم يكونوا مختلفين' });
+  const grouped = new Map();
+  for (const line of lines) {
+    const productId = Number(line.productId);
+    const qty = roundTo(line.qty, 5);
+    if (!productId || qty == null || !(qty > 0)) return res.status(400).json({ error: 'راجع الصنف والكمية' });
+    grouped.set(productId, roundTo((grouped.get(productId) || 0) + qty, 5));
+  }
+  if (!grouped.size) return res.status(400).json({ error: 'أضف صنفاً واحداً على الأقل' });
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    await assertStores(tx, [fromStoreId, toStoreId]);
+    const docNo = await nextNumber(tx, 'tblStockTransfer', 'StockTransferDocID');
+    const header = await txQuery(tx, `
+      INSERT INTO tblStockTransfer
+        (StockTransferDocID, StockTransferDocDate, FromStoreID, ToStoreID, TransferConfirmed, AutoConfirmed,
+         ConfirmedBy, ConfirmationDate, Notes, CompCode, BranchId, ToBranchId, InsertedDate, InsertedBy)
+      VALUES
+        (@doc, CAST(GETDATE() AS date), @fromStore, @toStore, 1, 0, @actor, GETDATE(), @notes, 0, 0, 0, GETDATE(), @actor);
+      SELECT SCOPE_IDENTITY() AS id;
+    `, [
+      { name: 'doc', type: sql.Numeric(18, 0), value: docNo },
+      { name: 'fromStore', type: sql.Numeric(18, 0), value: fromStoreId },
+      { name: 'toStore', type: sql.Numeric(18, 0), value: toStoreId },
+      { name: 'notes', type: sql.NVarChar(250), value: notes }
+    ]);
+    const transferId = header.recordset[0].id;
+    for (const [productId, qty] of grouped) {
+      await assertProduct(tx, productId);
+      const stock = await txQuery(tx, `
+        SELECT ISNULL(ProductStock, 0) AS qty
+        FROM tblProductsStores WITH (UPDLOCK, HOLDLOCK)
+        WHERE ProductID = @pid AND StoreID = @store AND CompCode = 0
+      `, [
+        { name: 'pid', type: sql.Numeric(18, 0), value: productId },
+        { name: 'store', type: sql.Numeric(18, 0), value: fromStoreId }
+      ]);
+      const available = stock.recordset[0] ? Number(stock.recordset[0].qty) : 0;
+      if (available + 0.00001 < qty) throw new Error('الرصيد غير كاف في مخزن الخروج');
+      const cost = await latestCost(tx, productId);
+      const guid = crypto.randomUUID();
+      await ensureStore(tx, productId, fromStoreId);
+      await ensureStore(tx, productId, toStoreId);
+      const movement = async (storeId, qtyIn, qtyOut, priceColumn) => {
+        await txQuery(tx, `
+          INSERT INTO tblInventory
+            (InvoiceNo, InvoiceDate, DocumentDate, ProductID, StoreID, InQuantity, InBonus,
+             OutQuantity, OutBonus, ${priceColumn}, Cost, TransactionID, CompCode, RowGUID)
+          VALUES
+            (@doc, CAST(GETDATE() AS date), CAST(GETDATE() AS date), @pid, @store, @qtyIn, 0,
+             @qtyOut, 0, 0, @cost, 16, 0, @guid)
+        `, [
+          { name: 'doc', type: sql.Numeric(18, 0), value: docNo },
+          { name: 'pid', type: sql.Numeric(18, 0), value: productId },
+          { name: 'store', type: sql.Numeric(18, 0), value: storeId },
+          { name: 'qtyIn', type: sql.Numeric(18, 5), value: qtyIn },
+          { name: 'qtyOut', type: sql.Numeric(18, 5), value: qtyOut },
+          { name: 'cost', type: sql.Numeric(18, 4), value: cost },
+          { name: 'guid', type: sql.UniqueIdentifier, value: guid }
+        ]);
+      };
+      await movement(fromStoreId, 0, qty, 'LotPricePerUnit');
+      await movement(toStoreId, qty, 0, 'PurchasePricePerUnit');
+      await txQuery(tx, `
+        INSERT INTO tblStockTransferDetails
+          (StockTransferID, ProductID, Quantity, RowGUID, InsertedDate, InsertedBy)
+        VALUES (@id, @pid, @qty, @guid, GETDATE(), @actor)
+      `, [
+        { name: 'id', type: sql.Numeric(18, 0), value: transferId },
+        { name: 'pid', type: sql.Numeric(18, 0), value: productId },
+        { name: 'qty', type: sql.Numeric(18, 5), value: qty },
+        { name: 'guid', type: sql.UniqueIdentifier, value: guid }
+      ]);
+    }
+    await tx.commit();
+    memoryCache.clear();
+    recordActivity(req, { action: 'transfer', detail: `تحويل مخزن رقم ${docNo}`, ref: `transfer:${transferId}` });
+    res.json({ id: transferId, no: docNo });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حفظ التحويل' });
+  }
+});
+
 async function alignInventoryGuid(tx, detailTable, line, invoiceNo, transactionId, qtyColumn, partyColumn, partyId) {
   const tables = { tblSellingInvoicesDetails: true, tblPurchaseInvoicesDetails: true };
   const qtyColumns = { OutQuantity: true, InQuantity: true };
@@ -2886,10 +3105,14 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
     if (Number(header.returnedAmount) > 0.0001 || existing.some((line) => Number(line.returned) > 0.0001)) {
       throw new Error('الفاتورة فيها مرتجع، لا يمكن تعديلها من هنا');
     }
-    if ([header.discount, header.productsDiscount, header.tax, header.addedTax, header.itpt, header.collectDiscount].some((value) => Number(value) > 0.0001)) {
-      throw new Error('الفاتورة فيها خصم أو ضريبة، لا يمكن تعديلها من هنا');
+    if ([header.productsDiscount, header.tax, header.addedTax, header.itpt, header.collectDiscount].some((value) => Number(value) > 0.0001)) {
+      throw new Error('الفاتورة فيها ضريبة أو خصم على الأصناف، لا يمكن تعديلها من هنا');
     }
     if (!Number(header.journalId)) throw new Error('الفاتورة غير مربوطة بقيد محاسبي');
+    const priced = applyDiscount(parsed.total, req.body.discount, Number(header.discount) || 0);
+    if (priced.error) throw new Error(priced.error);
+    const net = priced.net;
+    if (!(net > 0)) throw new Error('إجمالي الفاتورة لازم يكون أكبر من صفر');
     const payments = await txQuery(tx, `
       SELECT c.SafeOperationID AS safeId, ISNULL(c.Collected, 0) AS collected, ISNULL(c.OnCollectDiscount, 0) AS discount,
         s.JournalEntryID AS safeJournalId, s.SafeOperationDocumentNo AS safeNo
@@ -2900,7 +3123,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
     if (payments.recordset.length > 1) throw new Error('الفاتورة لها أكثر من حركة تحصيل');
     const payment = payments.recordset[0] || null;
     if (payment && Number(payment.discount) > 0.0001) throw new Error('الفاتورة فيها خصم على التحصيل');
-    const paid = nextPaid(header.paid, header.total, parsed.total, req.body);
+    const paid = nextPaid(header.paid, header.total, net, req.body);
     if (!payment && Number(header.paid) > 0.0001 && !moneyClose(paid, header.paid)) {
       throw new Error('المبلغ المحصّل غير مربوط بحركة خزنة، لا يمكن تغيير حالة السداد');
     }
@@ -2908,7 +3131,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
       ? (await txQuery(tx, `SELECT ClientId, ISNULL(ClientName, N'') AS name, ISNULL(AccCode, N'') AS accCode FROM tblClients WHERE ClientId = @id`, [{ name: 'id', type: sql.Numeric(18, 0), value: clientId }])).recordset[0]
       : { ClientId: 0, name: 'عميل نقدي', accCode: '' };
     if (clientId && !client) throw new Error('العميل غير موجود');
-    const due = roundTo(parsed.total - paid, 4);
+    const due = roundTo(net - paid, 4);
     if (due > 0.0001 && !clientId) throw new Error('فاتورة الآجل تحتاج عميلاً');
     if (due > 0.0001 && clientId && !client.accCode) throw new Error('العميل ليس له كود حساب');
     const salesAccount = await accountByCode(tx, '12210301');
@@ -3023,13 +3246,17 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
       }
     }
     await txQuery(tx, `
-      UPDATE tblSellingInvoice SET ClientID = @clientId, SellingInvoiceTypeId = @typeId, TotalProductsPrice = @total, TaxbaseAmount = @total,
-        SellingInvoiceTotalAmount = @total, TotalCollectedAmount = @paid
+      UPDATE tblSellingInvoice SET ClientID = @clientId, SellingInvoiceTypeId = @typeId, TotalProductsPrice = @gross,
+        DiscountType = @dtype, DiscountAmount = @discount, TotalDiscountAmount = @discount,
+        TaxbaseAmount = @net, SellingInvoiceTotalAmount = @net, TotalCollectedAmount = @paid
       WHERE SellingInvoiceID = @id
     `, [
       { name: 'clientId', type: sql.Numeric(18, 0), value: client.ClientId || 0 },
       { name: 'typeId', type: sql.Int, value: invoiceTypeId(client.ClientId) },
-      { name: 'total', type: sql.Numeric(18, 4), value: parsed.total },
+      { name: 'gross', type: sql.Numeric(18, 4), value: parsed.total },
+      { name: 'discount', type: sql.Numeric(18, 4), value: priced.discount },
+      { name: 'dtype', type: sql.Int, value: priced.type },
+      { name: 'net', type: sql.Numeric(18, 4), value: net },
       { name: 'paid', type: sql.Numeric(18, 4), value: paid },
       { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
     ]);
@@ -3040,7 +3267,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
         SET SellingInvoiceTotalAmount = @total, Collected = @paid, TotalCollectedAmount = @paid
         WHERE SellingInvoiceID = @id
       `, [
-        { name: 'total', type: sql.Numeric(18, 4), value: parsed.total },
+        { name: 'total', type: sql.Numeric(18, 4), value: net },
         { name: 'paid', type: sql.Numeric(18, 4), value: paid },
         { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
       ]);
@@ -3101,7 +3328,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
       `, [
         { name: 'invoiceId', type: sql.Numeric(18, 0), value: invoiceId },
         { name: 'clientId', type: sql.Numeric(18, 0), value: client.ClientId || 0 },
-        { name: 'total', type: sql.Numeric(18, 4), value: parsed.total },
+        { name: 'total', type: sql.Numeric(18, 4), value: net },
         { name: 'paid', type: sql.Numeric(18, 4), value: paid },
         { name: 'safeId', type: sql.Numeric(18, 0), value: safe.recordset[0].id }
       ]);
@@ -3110,16 +3337,16 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
     if (paid > 0.0001) debitParts.push({ account: cashClearing, amount: paid });
     if (due > 0.0001) debitParts.push({ account: dueAccount, amount: due });
     await rebuildJournal(
-      tx, header.journalId, parsed.total,
+      tx, header.journalId, net,
       clip(`${saleText} - (${client.name})`, 250),
       header.no, 'SA',
       mergeDebits(debitParts).map((part) => ({ account: part.account, debit: part.amount, credit: 0, text: saleText }))
-        .concat([{ account: salesAccount, debit: 0, credit: parsed.total, text: `مبيعات - (${client.name})` }])
+        .concat([{ account: salesAccount, debit: 0, credit: net, text: `مبيعات - (${client.name})` }])
     );
     await tx.commit();
     memoryCache.clear();
-    recordActivity(req, { action: 'sale', detail: `تعديل فاتورة بيع رقم ${header.no} بإجمالي ${parsed.total}`, ref: `sale:${invoiceId}` });
-    res.json({ id: invoiceId, no: header.no, total: parsed.total });
+    recordActivity(req, { action: 'sale', detail: `تعديل فاتورة بيع رقم ${header.no} بإجمالي ${net}`, ref: `sale:${invoiceId}` });
+    res.json({ id: invoiceId, no: header.no, total: net });
   } catch (error) {
     try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
     console.error(error);
@@ -3158,10 +3385,14 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
     if (Number(header.returnedAmount) > 0.0001 || existing.some((line) => Number(line.returned) > 0.0001)) {
       throw new Error('الفاتورة فيها مرتجع، لا يمكن تعديلها من هنا');
     }
-    if ([header.discount, header.productsDiscount, header.tax, header.addedTax, header.itpt, header.collectDiscount].some((value) => Number(value) > 0.0001)) {
-      throw new Error('الفاتورة فيها خصم أو ضريبة، لا يمكن تعديلها من هنا');
+    if ([header.productsDiscount, header.tax, header.addedTax, header.itpt, header.collectDiscount].some((value) => Number(value) > 0.0001)) {
+      throw new Error('الفاتورة فيها ضريبة أو خصم على الأصناف، لا يمكن تعديلها من هنا');
     }
     if (!Number(header.journalId)) throw new Error('الفاتورة غير مربوطة بقيد محاسبي');
+    const priced = applyDiscount(parsed.total, req.body.discount, Number(header.discount) || 0);
+    if (priced.error) throw new Error(priced.error);
+    const net = priced.net;
+    if (!(net > 0)) throw new Error('إجمالي الفاتورة لازم يكون أكبر من صفر');
     const payments = await txQuery(tx, `
       SELECT p.SafeOperationID AS safeId, ISNULL(p.Paied, 0) AS collected, ISNULL(p.OnPaiedDiscount, 0) AS discount,
         s.JournalEntryID AS safeJournalId, s.SafeOperationDocumentNo AS safeNo
@@ -3172,7 +3403,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
     if (payments.recordset.length > 1) throw new Error('الفاتورة لها أكثر من حركة سداد');
     const payment = payments.recordset[0] || null;
     if (payment && Number(payment.discount) > 0.0001) throw new Error('الفاتورة فيها خصم على السداد');
-    const paid = nextPaid(header.paid, header.total, parsed.total, req.body);
+    const paid = nextPaid(header.paid, header.total, net, req.body);
     if (!payment && Number(header.paid) > 0.0001 && !moneyClose(paid, header.paid)) {
       throw new Error('المبلغ المدفوع غير مربوط بحركة خزنة، لا يمكن تغيير حالة السداد');
     }
@@ -3180,7 +3411,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
       ? (await txQuery(tx, `SELECT SupplierID, ISNULL(SupplierName, N'') AS name, ISNULL(AccCode, N'') AS accCode FROM tblSuppliers WHERE SupplierID = @id`, [{ name: 'id', type: sql.Numeric(18, 0), value: supplierId }])).recordset[0]
       : { SupplierID: 0, name: 'مشتريات نقدية', accCode: '2423' };
     if (supplierId && !supplier) throw new Error('المورد غير موجود');
-    if (roundTo(parsed.total - paid, 4) > 0.0001 && !supplier.SupplierID) throw new Error('فاتورة الآجل تحتاج مورداً');
+    if (roundTo(net - paid, 4) > 0.0001 && !supplier.SupplierID) throw new Error('فاتورة الآجل تحتاج مورداً');
     const counterCode = supplier.SupplierID ? supplier.accCode : '2423';
     if (!counterCode) throw new Error('المورد ليس له كود حساب');
     const purchasesAccount = await accountByCode(tx, '2424');
@@ -3286,13 +3517,17 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
       }
     }
     await txQuery(tx, `
-      UPDATE tblPurchaseInvoice SET SupplierID = @supplierId, PurchaseInvoiceTypeId = @typeId, TotalProductsPrice = @total, TaxbaseAmount = @total,
-        PurchaseInvoiceTotalAmount = @total, TotalPaiedAmount = @paid
+      UPDATE tblPurchaseInvoice SET SupplierID = @supplierId, PurchaseInvoiceTypeId = @typeId, TotalProductsPrice = @gross,
+        DiscountType = @dtype, DiscountAmount = @discount, TotalDiscountAmount = @discount,
+        TaxbaseAmount = @net, PurchaseInvoiceTotalAmount = @net, TotalPaiedAmount = @paid
       WHERE PurchaseInvoiceID = @id
     `, [
       { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
       { name: 'typeId', type: sql.Int, value: invoiceTypeId(supplier.SupplierID) },
-      { name: 'total', type: sql.Numeric(18, 4), value: parsed.total },
+      { name: 'gross', type: sql.Numeric(18, 4), value: parsed.total },
+      { name: 'discount', type: sql.Numeric(18, 4), value: priced.discount },
+      { name: 'dtype', type: sql.Int, value: priced.type },
+      { name: 'net', type: sql.Numeric(18, 4), value: net },
       { name: 'paid', type: sql.Numeric(18, 4), value: paid },
       { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
     ]);
@@ -3303,7 +3538,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
         SET PurchaseInvoiceTotalAmount = @total, Paied = @paid, TotalPaiedAmount = @paid
         WHERE PurchaseInvoiceID = @id
       `, [
-        { name: 'total', type: sql.Numeric(18, 4), value: parsed.total },
+        { name: 'total', type: sql.Numeric(18, 4), value: net },
         { name: 'paid', type: sql.Numeric(18, 4), value: paid },
         { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
       ]);
@@ -3364,24 +3599,24 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
       `, [
         { name: 'invoiceId', type: sql.Numeric(18, 0), value: invoiceId },
         { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
-        { name: 'total', type: sql.Numeric(18, 4), value: parsed.total },
+        { name: 'total', type: sql.Numeric(18, 4), value: net },
         { name: 'paid', type: sql.Numeric(18, 4), value: paid },
         { name: 'safeId', type: sql.Numeric(18, 0), value: safe.recordset[0].id }
       ]);
     }
     await rebuildJournal(
-      tx, header.journalId, parsed.total,
+      tx, header.journalId, net,
       clip(`${purchaseText} - (${supplier.name})`, 250),
       header.no, 'PU',
       [
-        { account: purchasesAccount, debit: parsed.total, credit: 0, text: purchaseText },
-        { account: counterAccount, debit: 0, credit: parsed.total, text: `مشتريات - (${supplier.name})` }
+        { account: purchasesAccount, debit: net, credit: 0, text: purchaseText },
+        { account: counterAccount, debit: 0, credit: net, text: `مشتريات - (${supplier.name})` }
       ]
     );
     await tx.commit();
     memoryCache.clear();
-    recordActivity(req, { action: 'purchase', detail: `تعديل فاتورة شراء رقم ${header.no} بإجمالي ${parsed.total}`, ref: `purchase:${invoiceId}` });
-    res.json({ id: invoiceId, no: header.no, total: parsed.total });
+    recordActivity(req, { action: 'purchase', detail: `تعديل فاتورة شراء رقم ${header.no} بإجمالي ${net}`, ref: `purchase:${invoiceId}` });
+    res.json({ id: invoiceId, no: header.no, total: net });
   } catch (error) {
     try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
     console.error(error);

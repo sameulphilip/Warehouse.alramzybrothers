@@ -3,6 +3,7 @@ const icons = {
   dashboard: svg('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
   reports: svg('<path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 16v-5M12 16V8M16 16v-3"/>'),
   stock: svg('<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>'),
+  transfer: svg('<path d="M7 7h11l-3-3M18 17H7l3 3"/><path d="M18 7v4M6 17v-4"/>'),
   products: svg('<path d="M20.6 13.4L13.4 20.6a2 2 0 0 1-2.8 0L3 13V4h9l8.6 8.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1"/>'),
   newSale: svg('<path d="M6 2h9l5 5v15H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><path d="M14 2v6h6M12 11v6M9 14h6"/>'),
   newPurchase: svg('<circle cx="9" cy="20" r="1"/><circle cx="18" cy="20" r="1"/><path d="M3 4h2l2.2 11h11.3l2-7H7"/><path d="M9 9h6"/>'),
@@ -22,6 +23,7 @@ const sections = [
   { id: 'dashboard', label: 'لوحة التحكم', title: 'لوحة التحكم', subtitle: 'ملخص حي من قاعدة بيانات الفروع' },
   { id: 'reports', label: 'التقارير', title: 'التقارير', subtitle: 'مبيعات ومشتريات، وحركة صنف، وتاريخ عميل أو مورد' },
   { id: 'stock', label: 'المخزون', title: 'المخزون حسب المخزن', subtitle: 'الرصيد الحالي لكل منتج داخل كل مخزن' },
+  { id: 'transfer', label: 'تحويل مخزن', title: 'تحويل بين المخازن', subtitle: 'الصنف يخرج من مخزن ويدخل مخزناً آخر، وتظهر الحركتان في تقرير المنتج' },
   { id: 'products', label: 'المنتجات', title: 'المنتجات', subtitle: 'تعديل بيانات المنتج وسعر البيع، أو إضافة منتج جديد' },
   { id: 'newSale', label: 'فاتورة بيع جديدة', title: 'فاتورة بيع جديدة', subtitle: 'تسجّل الفاتورة والمخزون والقيد مثل البرنامج الأصلي' },
   { id: 'sales', label: 'فواتير البيع', title: 'فواتير البيع', subtitle: 'اضغط الفاتورة لعرض الأصناف' },
@@ -176,6 +178,7 @@ async function openSection(id) {
     if (id === 'stores') return renderStores(await api('/api/stores'));
     if (!state.stores.length) state.stores = (await api('/api/stores')).stores;
     if (id === 'stock') return renderStock(await api(stockUrl()));
+    if (id === 'transfer') return renderTransfer();
     if (id === 'products') return renderProducts(await api(listUrl('/api/products')));
     if (id === 'clients' || id === 'suppliers') {
       const data = await api(listUrl(`/api/${id}`));
@@ -1343,8 +1346,87 @@ function renderStores(data) {
   );
 }
 
-const draft = { clientId: 0, clientName: 'عميل نقدي', lines: [], editId: null, editNo: null, paid: true, partial: 0, storeId: null, hold: false };
-const purchaseDraft = { supplierId: 0, supplierName: 'مشتريات نقدية', lines: [], editId: null, editNo: null, paid: true, partial: 0, storeId: null, hold: false };
+function renderTransfer() {
+  const lines = [];
+  const destination = state.stores[1] ? state.stores[1].id : null;
+  content.innerHTML = `
+    <div class="panel panel-pad sale-form">
+      <div class="toolbar">
+        <label class="dash-store">من المخزن<select id="fromStore">${storeOptions(state.stores[0] ? state.stores[0].id : null)}</select></label>
+        <label class="dash-store">إلى المخزن<select id="toStore">${storeOptions(destination)}</select></label>
+      </div>
+      <div class="toolbar">
+        <input id="productQ" placeholder="رقم أو كود أو اسم المنتج">
+        <input id="lineQty" type="number" min="0.01" step="0.01" value="1" placeholder="الكمية">
+        <button id="findProduct" type="button" class="ghost">بحث منتج</button>
+      </div>
+      <div id="productResults"></div>
+      <div class="data" style="--cols:1.6fr .8fr .7fr .5fr">
+        <div class="data-head"><span>الصنف</span><span>الكود</span><span>الكمية</span><span></span></div>
+        <div id="transferLines"></div>
+      </div>
+      <p class="note">الكمية تخرج من المخزن الأول وتدخل المخزن الثاني. حركة الصنف تعرض تحويل خروج وتحويل دخول.</p>
+      <button id="saveTransfer" class="primary" type="button">حفظ التحويل</button>
+      <div id="transferError" class="error"></div>
+    </div>`;
+  const draw = () => {
+    document.getElementById('transferLines').innerHTML = lines.map((line, index) =>
+      `<div class="data-row"><span data-label="الصنف">${esc(line.name)}</span><span data-label="الكود">${esc(line.code)}</span><span data-label="الكمية">${num(line.qty)}</span><span data-label="حذف"><button type="button" data-i="${index}" class="ghost remove-line">حذف</button></span></div>`
+    ).join('') || '<div class="empty">لم تُضف أصناف</div>';
+    document.querySelectorAll('.remove-line').forEach((button) => {
+      button.onclick = () => { lines.splice(Number(button.dataset.i), 1); draw(); };
+    });
+  };
+  draw();
+  document.getElementById('findProduct').onclick = async () => {
+    const q = document.getElementById('productQ').value.trim();
+    const data = await api('/api/products?q=' + encodeURIComponent(q) + '&page=1&pageSize=8');
+    document.getElementById('productResults').innerHTML = grid(
+      [{ label: 'رقم الصنف', width: '0.7fr' }, { label: 'الكود', width: '0.8fr' }, { label: 'المنتج', width: '1.6fr' }, { label: 'الرصيد الكلي', width: '0.7fr' }],
+      data.rows.map((row) => ({
+        clickable: true,
+        attrs: `data-id="${row.id}" data-code="${esc(row.code)}" data-name="${esc(row.name)}"`,
+        cells: [esc(row.id), esc(row.code), esc(row.name), num(row.stock)]
+      }))
+    );
+    document.querySelectorAll('#productResults .data-row').forEach((row) => {
+      row.onclick = () => {
+        const qty = Number(document.getElementById('lineQty').value);
+        if (!(qty > 0)) {
+          document.getElementById('transferError').textContent = 'اكتب الكمية قبل اختيار المنتج';
+          return;
+        }
+        lines.push({ productId: Number(row.dataset.id), code: row.dataset.code, name: row.dataset.name, qty });
+        document.getElementById('transferError').textContent = '';
+        draw();
+      };
+    });
+  };
+  document.getElementById('saveTransfer').onclick = async () => {
+    const button = document.getElementById('saveTransfer');
+    const error = document.getElementById('transferError');
+    error.textContent = '';
+    button.disabled = true;
+    try {
+      const result = await api('/api/transfers', {
+        method: 'POST',
+        body: JSON.stringify({
+          fromStoreId: Number(document.getElementById('fromStore').value),
+          toStoreId: Number(document.getElementById('toStore').value),
+          lines
+        })
+      });
+      content.innerHTML = `<div class="panel panel-pad"><p class="note">تم تحويل المخزون برقم ${esc(result.no)}. افتح تقرير حركة الصنف لترى خروج الكمية من المخزن الأول ودخولها في الثاني.</p><button id="anotherTransfer" class="primary" type="button">تحويل آخر</button></div>`;
+      document.getElementById('anotherTransfer').onclick = () => openSection('transfer');
+    } catch (err) {
+      error.textContent = err.message;
+      button.disabled = false;
+    }
+  };
+}
+
+const draft = { clientId: 0, clientName: 'عميل نقدي', lines: [], editId: null, editNo: null, paid: true, partial: 0, discount: 0, storeId: null, hold: false };
+const purchaseDraft = { supplierId: 0, supplierName: 'مشتريات نقدية', lines: [], editId: null, editNo: null, paid: true, partial: 0, discount: 0, storeId: null, hold: false };
 
 function resetSaleDraft() {
   draft.clientId = 0;
@@ -1354,6 +1436,7 @@ function resetSaleDraft() {
   draft.editNo = null;
   draft.paid = true;
   draft.partial = 0;
+  draft.discount = 0;
   draft.storeId = null;
   draft.hold = false;
 }
@@ -1366,6 +1449,7 @@ function resetPurchaseDraft() {
   purchaseDraft.editNo = null;
   purchaseDraft.paid = true;
   purchaseDraft.partial = 0;
+  purchaseDraft.discount = 0;
   purchaseDraft.storeId = null;
   purchaseDraft.hold = false;
 }
@@ -1461,6 +1545,47 @@ function bindPaidAmount() {
   box.onchange = () => wrap.classList.toggle('hidden', !box.checked);
 }
 
+function showDraftTotal(target, inputId, gross) {
+  const raw = Number(document.getElementById(inputId).value || 0);
+  const discount = Number.isFinite(raw) && raw > 0 ? Math.min(raw, gross) : 0;
+  target.discount = discount;
+  document.getElementById('draftTotal').textContent = `الأصناف ${money(gross)} · الخصم ${money(discount)} · الصافي ${money(Math.max(gross - discount, 0))}`;
+}
+
+function bindNewParty(kind) {
+  const sale = kind === 'sales';
+  const box = document.getElementById(sale ? 'newClientBox' : 'newSupplierBox');
+  const error = document.getElementById(sale ? 'saleError' : 'purchaseError');
+  document.getElementById(sale ? 'newClient' : 'newSupplier').onclick = () => box.classList.toggle('hidden');
+  document.getElementById(sale ? 'saveClient' : 'saveSupplier').onclick = async () => {
+    error.textContent = '';
+    try {
+      const created = await api(sale ? '/api/clients' : '/api/suppliers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: document.getElementById(sale ? 'newClientName' : 'newSupplierName').value,
+          phone: document.getElementById(sale ? 'newClientPhone' : 'newSupplierPhone').value
+        })
+      });
+      const target = sale ? draft : purchaseDraft;
+      if (sale) {
+        target.clientId = created.id;
+        target.clientName = created.name;
+        document.getElementById('clientPick').textContent = `العميل: ${created.name}`;
+      } else {
+        target.supplierId = created.id;
+        target.supplierName = created.name;
+        document.getElementById('supplierPick').textContent = `المورد: ${created.name}`;
+      }
+      document.getElementById('paidNow').checked = false;
+      document.getElementById('paidAmountWrap').classList.add('hidden');
+      box.classList.add('hidden');
+    } catch (err) {
+      error.textContent = err.message;
+    }
+  };
+}
+
 function paidPayload() {
   const paid = document.getElementById('paidNow').checked;
   const raw = document.getElementById('paidAmount').value.trim();
@@ -1486,8 +1611,14 @@ function renderNewSale() {
         <select id="saleStore">${storeOptions(draft.storeId)}</select>
         ${paidFields(draft.paid, draft.partial, 'تحصيل نقدي')}
         <button id="findClient" type="button" class="ghost">بحث عميل</button>
+        <button id="newClient" type="button" class="ghost">عميل جديد</button>
       </div>
       <div id="clientPick" class="meta">العميل: ${esc(draft.clientName || 'عميل نقدي')}</div>
+      <div id="newClientBox" class="mini-product hidden">
+        <input id="newClientName" maxlength="50" placeholder="اسم العميل">
+        <input id="newClientPhone" maxlength="20" placeholder="الموبايل، ويمكن تركه فارغاً">
+        <button id="saveClient" class="primary" type="button">حفظ العميل واستخدامه</button>
+      </div>
       <div id="clientResults"></div>
       <div class="toolbar">
         <input id="productQ" placeholder="رقم أو كود أو اسم المنتج">
@@ -1501,6 +1632,7 @@ function renderNewSale() {
         <div class="data-head"><span>الصنف</span><span>رقم الصنف</span><span>الكود</span>${editing ? '<span>المخزن</span>' : ''}<span>الكمية</span><span>السعر</span><span>الإجمالي</span><span></span></div>
         <div id="draftLines"></div>
       </div>
+      <div class="toolbar"><label class="paid-amount">الخصم<input id="saleDiscount" type="number" min="0" step="0.01" value="${draft.discount || ''}" placeholder="0"></label></div>
       <div class="meta"><span id="draftTotal">الإجمالي: 0</span></div>
       <p class="note">${draft.partial ? `المحصّل حالياً ${money(draft.partial)}. غيّر خانة المدفوع لو عايز مبلغاً مختلفاً، ولو فضيتها التحصيل يبقى على كامل الفاتورة. لو شلت العلامة، المبلغ المحصّل يفضل كما هو.` : 'اكتب في خانة المدفوع مبلغاً أقل من الإجمالي لو التحصيل جزئي، والباقي يفضل على العميل. اتركها فاضية لتحصيل الفاتورة كاملة.'}</p>
       <button id="saveSale" class="primary" type="button">${editing ? 'حفظ التعديل' : 'حفظ الفاتورة'}</button>
@@ -1513,7 +1645,7 @@ function renderNewSale() {
     document.getElementById('draftLines').innerHTML = draft.lines.map((line, index) =>
       `<div class="data-row"><span data-label="الصنف">${esc(line.name)}</span><span data-label="رقم الصنف">${esc(line.productId || '')}</span><span data-label="الكود">${esc(line.code || '')}</span>${editing ? `<span data-label="المخزن"><select data-i="${index}" class="line-store">${storeOptions(line.storeId)}</select></span>` : ''}<span data-label="الكمية"><input class="line-qty" data-i="${index}" type="number" min="0.01" step="0.01" value="${line.qty}"></span><span data-label="السعر"><input class="line-price" data-i="${index}" type="number" min="0" step="0.01" value="${line.price}"></span><span data-label="الإجمالي" class="line-sum">${money(line.qty * line.price)}</span><span data-label="حذف"><button type="button" data-i="${index}" class="ghost remove-line">حذف</button></span></div>`
     ).join('') || '<div class="empty">لم تُضف أصناف</div>';
-    document.getElementById('draftTotal').textContent = 'الإجمالي: ' + money(total);
+    showDraftTotal(draft, 'saleDiscount', total);
     document.querySelectorAll('.line-qty, .line-price').forEach((input) => {
       input.oninput = () => {
         readLineInputs(draft.lines);
@@ -1521,7 +1653,7 @@ function renderNewSale() {
         const line = draft.lines[Number(input.dataset.i)];
         row.querySelector('.line-sum').textContent = money(line.qty * line.price);
         const next = draft.lines.reduce((sum, item) => sum + item.qty * item.price, 0);
-        document.getElementById('draftTotal').textContent = 'الإجمالي: ' + money(next);
+        showDraftTotal(draft, 'saleDiscount', next);
       };
     });
     document.querySelectorAll('.remove-line').forEach((button) => {
@@ -1530,6 +1662,11 @@ function renderNewSale() {
   };
   drawLines();
   bindPaidAmount();
+  bindNewParty('sales');
+  document.getElementById('saleDiscount').oninput = () => {
+    const total = draft.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
+    showDraftTotal(draft, 'saleDiscount', total);
+  };
   document.getElementById('findClient').onclick = async () => {
     const q = document.getElementById('clientQ').value.trim();
     const data = await api('/api/clients?q=' + encodeURIComponent(q) + '&page=1&pageSize=8');
@@ -1607,6 +1744,7 @@ function renderNewSale() {
       const payload = {
         clientId: draft.clientId,
         storeId: Number(document.getElementById('saleStore').value),
+        discount: Number(document.getElementById('saleDiscount').value || 0),
         ...paidPayload(),
         lines: draft.lines.map((line) => ({
           lineId: line.lineId,
@@ -1643,8 +1781,14 @@ function renderNewPurchase() {
         <select id="purchaseStore">${storeOptions(purchaseDraft.storeId)}</select>
         ${paidFields(purchaseDraft.paid, purchaseDraft.partial, 'سداد نقدي')}
         <button id="findSupplier" type="button" class="ghost">بحث مورد</button>
+        <button id="newSupplier" type="button" class="ghost">مورد جديد</button>
       </div>
       <div id="supplierPick" class="meta">المورد: ${esc(purchaseDraft.supplierName || 'مشتريات نقدية')}</div>
+      <div id="newSupplierBox" class="mini-product hidden">
+        <input id="newSupplierName" maxlength="50" placeholder="اسم المورد">
+        <input id="newSupplierPhone" maxlength="20" placeholder="الموبايل، ويمكن تركه فارغاً">
+        <button id="saveSupplier" class="primary" type="button">حفظ المورد واستخدامه</button>
+      </div>
       <div id="supplierResults"></div>
       <div class="toolbar">
         <input id="productQ" placeholder="رقم أو كود أو اسم المنتج">
@@ -1658,6 +1802,7 @@ function renderNewPurchase() {
         <div class="data-head"><span>الصنف</span><span>رقم الصنف</span><span>الكود</span>${editing ? '<span>المخزن</span>' : ''}<span>الكمية</span><span>السعر</span><span>الإجمالي</span><span></span></div>
         <div id="draftLines"></div>
       </div>
+      <div class="toolbar"><label class="paid-amount">الخصم<input id="purchaseDiscount" type="number" min="0" step="0.01" value="${purchaseDraft.discount || ''}" placeholder="0"></label></div>
       <div class="meta"><span id="draftTotal">الإجمالي: 0</span></div>
       <p class="note">${purchaseDraft.partial ? `المدفوع حالياً ${money(purchaseDraft.partial)}. غيّر خانة المدفوع لو عايز مبلغاً مختلفاً، ولو فضيتها السداد يبقى على كامل الفاتورة. لو شلت العلامة، المبلغ المدفوع يفضل كما هو.` : 'اكتب في خانة المدفوع مبلغاً أقل من الإجمالي لو السداد جزئي، والباقي يفضل على المورد. اتركها فاضية لسداد الفاتورة كاملة.'}</p>
       <button id="savePurchase" class="primary" type="button">${editing ? 'حفظ التعديل' : 'حفظ فاتورة الشراء'}</button>
@@ -1670,7 +1815,7 @@ function renderNewPurchase() {
     document.getElementById('draftLines').innerHTML = purchaseDraft.lines.map((line, index) =>
       `<div class="data-row"><span data-label="الصنف">${esc(line.name)}</span><span data-label="رقم الصنف">${esc(line.productId || '')}</span><span data-label="الكود">${esc(line.code || '')}</span>${editing ? `<span data-label="المخزن"><select data-i="${index}" class="line-store">${storeOptions(line.storeId)}</select></span>` : ''}<span data-label="الكمية"><input class="line-qty" data-i="${index}" type="number" min="0.01" step="0.01" value="${line.qty}"></span><span data-label="السعر"><input class="line-price" data-i="${index}" type="number" min="0" step="0.01" value="${line.price}"></span><span data-label="الإجمالي" class="line-sum">${money(line.qty * line.price)}</span><span data-label="حذف"><button type="button" data-i="${index}" class="ghost remove-line">حذف</button></span></div>`
     ).join('') || '<div class="empty">لم تُضف أصناف</div>';
-    document.getElementById('draftTotal').textContent = 'الإجمالي: ' + money(total);
+    showDraftTotal(purchaseDraft, 'purchaseDiscount', total);
     document.querySelectorAll('.line-qty, .line-price').forEach((input) => {
       input.oninput = () => {
         readLineInputs(purchaseDraft.lines);
@@ -1678,7 +1823,7 @@ function renderNewPurchase() {
         const line = purchaseDraft.lines[Number(input.dataset.i)];
         row.querySelector('.line-sum').textContent = money(line.qty * line.price);
         const next = purchaseDraft.lines.reduce((sum, item) => sum + item.qty * item.price, 0);
-        document.getElementById('draftTotal').textContent = 'الإجمالي: ' + money(next);
+        showDraftTotal(purchaseDraft, 'purchaseDiscount', next);
       };
     });
     document.querySelectorAll('.remove-line').forEach((button) => {
@@ -1687,6 +1832,11 @@ function renderNewPurchase() {
   };
   drawLines();
   bindPaidAmount();
+  bindNewParty('purchases');
+  document.getElementById('purchaseDiscount').oninput = () => {
+    const total = purchaseDraft.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
+    showDraftTotal(purchaseDraft, 'purchaseDiscount', total);
+  };
   document.getElementById('findSupplier').onclick = async () => {
     const q = document.getElementById('supplierQ').value.trim();
     const data = await api('/api/suppliers?q=' + encodeURIComponent(q) + '&page=1&pageSize=8');
@@ -1764,6 +1914,7 @@ function renderNewPurchase() {
       const payload = {
         supplierId: purchaseDraft.supplierId,
         storeId: Number(document.getElementById('purchaseStore').value),
+        discount: Number(document.getElementById('purchaseDiscount').value || 0),
         ...paidPayload(),
         lines: purchaseDraft.lines.map((line) => ({
           lineId: line.lineId,
@@ -1895,6 +2046,7 @@ function invoicePrintHtml(kind, data) {
     ['عدد الأصناف', num(data.lines.length)]
   ];
   const totals = [
+    ...(Number(invoice.discount) > 0 ? [['قبل الخصم', money(invoice.products)], ['الخصم', money(invoice.discount)]] : []),
     ['الإجمالي', money(invoice.total)],
     ['المدفوع', money(invoice.paid)],
     ['المرتجع', money(invoice.returnedAmount)],
@@ -1936,6 +2088,7 @@ async function openInvoice(kind, id) {
       <button id="editInvoice" class="ghost" type="button">تعديل الفاتورة</button>
     </div>
     <div class="money">
+      ${Number(invoice.discount) > 0 ? `<div><span>قبل الخصم</span><strong>${money(invoice.products)}</strong></div><div><span>الخصم</span><strong>${money(invoice.discount)}</strong></div>` : ''}
       <div><span>الإجمالي</span><strong>${money(invoice.total)}</strong></div>
       <div><span>المدفوع</span><strong>${money(invoice.paid)}</strong></div>
       <div><span>المرتجع</span><strong>${money(invoice.returnedAmount)}</strong></div>
@@ -1982,6 +2135,7 @@ async function beginEdit(kind, id) {
   target.lines = lines;
   target.editId = Number(id);
   target.editNo = invoice.no;
+  target.discount = Number(invoice.discount) || 0;
   target.partial = !fully && Number(invoice.paid) > 0 ? Number(invoice.paid) : 0;
   target.paid = fully || target.partial > 0;
   target.storeId = lines[0] ? lines[0].storeId : null;
