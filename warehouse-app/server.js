@@ -326,11 +326,16 @@ function likeOf(q) {
 }
 
 async function runQuery(sqlText, inputs = []) {
+  const sets = await runSets(sqlText, inputs);
+  return sets[0] || [];
+}
+
+async function runSets(sqlText, inputs = []) {
   const pool = await poolPromise;
   const request = pool.request();
   for (const item of inputs) request.input(item.name, item.type, item.value);
   const result = await request.query(sqlText);
-  return result.recordset;
+  return result.recordsets;
 }
 
 const memoryCache = new Map();
@@ -502,7 +507,7 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
   try {
     const period = dashboardPeriod(req.query);
     const store = chosenStore(req.query.storeId);
-    const payload = await cached(`dashboard:${period.from}:${period.to}:${store == null ? 'all' : store}`, 60000, async () => {
+    const payload = await cached(`dashboard:${period.from}:${period.to}:${store == null ? 'all' : store}`, 180000, async () => {
     const pool = await poolPromise;
     const periodSql = `
       DECLARE @start datetime, @end datetime, @prevStart datetime, @prevEnd datetime
@@ -537,8 +542,8 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
       : `ISNULL((SELECT SUM(PurchaseInvoiceTotalAmount) FROM tblPurchaseInvoice WHERE PurchaseInvoiceDate >= @prevStart AND PurchaseInvoiceDate < @prevEnd), 0)`;
     const summaryRequest = pool.request();
     bindPeriod(summaryRequest);
-    const summary = await summaryRequest.query(`
-      ${periodSql}
+    const bucket = period.monthly ? 'char(7)' : 'char(10)';
+    const summarySelect = store != null ? `
       SELECT
         CONVERT(char(10), @start, 120) AS periodStart,
         CONVERT(char(10), DATEADD(day, -1, @end), 120) AS periodEnd,
@@ -550,12 +555,40 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
         ${prevBuys} AS prevPurchases,
         (SELECT ISNULL(SUM(NotCollectedAmount), 0) FROM tblSellingInvoice) AS salesDue,
         (SELECT ISNULL(SUM(NotPaiedAmount), 0) FROM tblPurchaseInvoice) AS purchaseDue
-    `);
-    const trendRequest = pool.request();
-    bindPeriod(trendRequest);
-    const bucket = period.monthly ? 'char(7)' : 'char(10)';
-    const trend = await trendRequest.query(store != null ? `
-      ${periodSql}
+    ` : `
+      SELECT
+        CONVERT(char(10), @start, 120) AS periodStart,
+        CONVERT(char(10), DATEADD(day, -1, @end), 120) AS periodEnd,
+        s.sales, s.saleCount, s.prevSales, sd.salesDue,
+        b.purchases, b.purchaseCount, b.prevPurchases, bd.purchaseDue
+      FROM (
+        SELECT
+          ISNULL(SUM(CASE WHEN SellingInvoiceDate >= @start AND SellingInvoiceDate < @end THEN SellingInvoiceTotalAmount END), 0) AS sales,
+          ISNULL(SUM(CASE WHEN SellingInvoiceDate >= @start AND SellingInvoiceDate < @end THEN 1 END), 0) AS saleCount,
+          ISNULL(SUM(CASE WHEN SellingInvoiceDate < @start THEN SellingInvoiceTotalAmount END), 0) AS prevSales
+        FROM tblSellingInvoice WITH (INDEX(IX_Ramzy_SellingInvoice_Date))
+        WHERE SellingInvoiceDate >= @prevStart AND SellingInvoiceDate < @end
+      ) s
+      CROSS JOIN (
+        SELECT
+          ISNULL(SUM(CASE WHEN PurchaseInvoiceDate >= @start AND PurchaseInvoiceDate < @end THEN PurchaseInvoiceTotalAmount END), 0) AS purchases,
+          ISNULL(SUM(CASE WHEN PurchaseInvoiceDate >= @start AND PurchaseInvoiceDate < @end THEN 1 END), 0) AS purchaseCount,
+          ISNULL(SUM(CASE WHEN PurchaseInvoiceDate < @start THEN PurchaseInvoiceTotalAmount END), 0) AS prevPurchases
+        FROM tblPurchaseInvoice WITH (INDEX(IX_Ramzy_PurchaseInvoice_Date))
+        WHERE PurchaseInvoiceDate >= @prevStart AND PurchaseInvoiceDate < @end
+      ) b
+      CROSS JOIN (
+        SELECT ISNULL(SUM(NotCollectedAmount), 0) AS salesDue
+        FROM tblSellingInvoice
+        WHERE NotCollectedAmount <> 0
+      ) sd
+      CROSS JOIN (
+        SELECT ISNULL(SUM(NotPaiedAmount), 0) AS purchaseDue
+        FROM tblPurchaseInvoice
+        WHERE NotPaiedAmount <> 0
+      ) bd
+    `;
+    const trendSelect = store != null ? `
       SELECT CONVERT(${bucket}, si.SellingInvoiceDate, 120) AS bucket,
              ISNULL(SUM(d.TotalPrice), 0) AS total
       FROM tblSellingInvoicesDetails d
@@ -564,17 +597,20 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
         AND si.SellingInvoiceDate >= @start AND si.SellingInvoiceDate < @end
       GROUP BY CONVERT(${bucket}, si.SellingInvoiceDate, 120)
     ` : `
-      ${periodSql}
       SELECT CONVERT(${bucket}, SellingInvoiceDate, 120) AS bucket,
              ISNULL(SUM(SellingInvoiceTotalAmount), 0) AS total
-      FROM tblSellingInvoice
+      FROM tblSellingInvoice WITH (INDEX(IX_Ramzy_SellingInvoice_Date))
       WHERE SellingInvoiceDate >= @start AND SellingInvoiceDate < @end
       GROUP BY CONVERT(${bucket}, SellingInvoiceDate, 120)
-    `);
-    const topRequest = pool.request();
-    bindPeriod(topRequest);
-    const top = await topRequest.query(`
+    `;
+    const stockFilter = store == null ? 'ProductStock <> 0' : 'ProductStock <> 0 AND StoreID = @store';
+    const soldFilter = store == null ? '1 = 1' : 'StoreID = @store';
+    const board = await summaryRequest.query(`
       ${periodSql}
+      ${summarySelect}
+      OPTION (RECOMPILE);
+      ${trendSelect}
+      OPTION (RECOMPILE);
       SELECT TOP 5
         p.ProductId AS id,
         ISNULL(p.ProductName, N'') AS name,
@@ -585,43 +621,33 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
       INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
       INNER JOIN tblProducts p ON p.ProductId = d.ProductID
       WHERE si.SellingInvoiceDate >= @start AND si.SellingInvoiceDate < @end
-        AND (@allStores = 1 OR d.StoreID = @store)
+        AND (${soldFilter})
       GROUP BY p.ProductId, p.ProductName, p.ProductCode
       ORDER BY SUM(ISNULL(d.TotalPrice, 0)) DESC
-    `);
-    const lowRequest = pool.request();
-    bindPeriod(lowRequest);
-    const low = await lowRequest.query(`
+      OPTION (RECOMPILE);
       SELECT
-        picked.id,
-        picked.name,
-        picked.code,
+        picked.id, picked.name, picked.code,
         ISNULL(loc.StoreName, N'') AS storeName,
-        picked.qty,
-        picked.reorderLevel
+        picked.qty, picked.reorderLevel
       FROM (
         SELECT TOP 8
           p.ProductId AS id,
-          CASE
-            WHEN REPLACE(REPLACE(LTRIM(RTRIM(ISNULL(p.ProductName, N''))), N'*', N''), N' ', N'') = N''
-            THEN ISNULL(p.ProductCode, '')
-            ELSE ISNULL(p.ProductName, N'')
-          END AS name,
+          ISNULL(p.ProductName, N'') AS name,
           ISNULL(p.ProductCode, '') AS code,
           ISNULL(stock.qty, 0) AS qty,
           ROUND((ISNULL(stock.qty, 0) + sold.netSold) * 0.10, 2) AS reorderLevel
         FROM tblProducts p
         INNER JOIN (
           SELECT ProductID, SUM(ISNULL(ProductStock, 0)) AS qty
-          FROM tblProductsStores
-          WHERE @allStores = 1 OR StoreID = @store
+          FROM tblProductsStores WITH (INDEX(IX_Ramzy_ProductsStores_InStock))
+          WHERE ${stockFilter}
           GROUP BY ProductID
         ) stock ON stock.ProductID = p.ProductId
         INNER JOIN (
           SELECT ProductID,
             SUM(ISNULL(OutQuantity, 0) + ISNULL(OutBonus, 0) - ISNULL(ReturnedQuantity, 0)) AS netSold
-          FROM tblSellingInvoicesDetails
-          WHERE @allStores = 1 OR StoreID = @store
+          FROM tblSellingInvoicesDetails WITH (INDEX(IX_Ramzy_SaleLines_Product))
+          WHERE ${soldFilter}
           GROUP BY ProductID
         ) sold ON sold.ProductID = p.ProductId
         WHERE sold.netSold > 0
@@ -636,11 +662,7 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
         INNER JOIN tblStores s ON s.StoreID = ps.StoreID
         WHERE ps.ProductID = picked.id
         ORDER BY CASE WHEN @allStores = 0 AND ps.StoreID = @store THEN 0 ELSE 1 END, ISNULL(ps.ProductStock, 0) DESC, s.StoreName
-      ) loc
-    `);
-    const recentRequest = pool.request();
-    bindPeriod(recentRequest);
-    const recent = await recentRequest.query(`
+      ) loc;
       SELECT TOP 3
         si.SellingInvoiceID AS id,
         si.SellingInvoiceNo AS no,
@@ -657,6 +679,11 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
       )
       ORDER BY si.SellingInvoiceID DESC
     `);
+    const summary = { recordset: board.recordsets[0] };
+    const trend = { recordset: board.recordsets[1] };
+    const top = { recordset: board.recordsets[2] };
+    const low = { recordset: board.recordsets[3] };
+    const recent = { recordset: board.recordsets[4] };
     const head = summary.recordset[0];
     const startKey = String(head.periodStart).slice(0, 10);
     const endKey = String(head.periodEnd).slice(0, 10);
@@ -908,6 +935,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
     }
     const q = String(req.query.q || '').trim().slice(0, 80);
     const store = chosenStore(req.query.storeId);
+    const textMatch = (clause) => (q ? `AND (${clause})` : '');
     const filters = [
       { name: 'from', type: sql.VarChar(10), value: from },
       { name: 'to', type: sql.VarChar(10), value: to },
@@ -931,7 +959,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
           FROM tblSellingInvoice si
           LEFT JOIN tblClients c ON c.ClientId = si.ClientID
           WHERE si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
-            AND (@q = N'' OR CAST(si.SellingInvoiceNo AS nvarchar(40)) LIKE @like OR c.ClientName LIKE @like)`,
+            ${textMatch(`CAST(si.SellingInvoiceNo AS nvarchar(40)) LIKE @like OR c.ClientName LIKE @like`)}`,
         pageSql: `
           WITH numbered AS (
             SELECT
@@ -947,7 +975,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
             FROM tblSellingInvoice si
             LEFT JOIN tblClients c ON c.ClientId = si.ClientID
             WHERE si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
-              AND (@q = N'' OR CAST(si.SellingInvoiceNo AS nvarchar(40)) LIKE @like OR c.ClientName LIKE @like)
+              ${textMatch(`CAST(si.SellingInvoiceNo AS nvarchar(40)) LIKE @like OR c.ClientName LIKE @like`)}
           )
           SELECT id, no, date, name, total, paid, due, totalRows
           FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
@@ -961,7 +989,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
           FROM tblPurchaseInvoice pi
           LEFT JOIN tblSuppliers s ON s.SupplierID = pi.SupplierID
           WHERE pi.PurchaseInvoiceDate ${period} pi.PurchaseInvoiceDate ${periodEnd}
-            AND (@q = N'' OR CAST(pi.PurchaseInvoiceNo AS nvarchar(40)) LIKE @like OR s.SupplierName LIKE @like)`,
+            ${textMatch(`CAST(pi.PurchaseInvoiceNo AS nvarchar(40)) LIKE @like OR s.SupplierName LIKE @like`)}`,
         pageSql: `
           WITH numbered AS (
             SELECT
@@ -977,7 +1005,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
             FROM tblPurchaseInvoice pi
             LEFT JOIN tblSuppliers s ON s.SupplierID = pi.SupplierID
             WHERE pi.PurchaseInvoiceDate ${period} pi.PurchaseInvoiceDate ${periodEnd}
-              AND (@q = N'' OR CAST(pi.PurchaseInvoiceNo AS nvarchar(40)) LIKE @like OR s.SupplierName LIKE @like)
+              ${textMatch(`CAST(pi.PurchaseInvoiceNo AS nvarchar(40)) LIKE @like OR s.SupplierName LIKE @like`)}
           )
           SELECT id, no, date, name, total, paid, due, totalRows
           FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
@@ -1050,7 +1078,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
             INNER JOIN tblProducts p ON p.ProductId = d.ProductID
             WHERE si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
               AND (@allStores = 1 OR d.StoreID = @storeId)
-              AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)
+              ${textMatch(`p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like`)}
             GROUP BY p.ProductId
           ) lines`,
         pageSql: `
@@ -1066,7 +1094,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
             INNER JOIN tblProducts p ON p.ProductId = d.ProductID
             WHERE si.SellingInvoiceDate ${period} si.SellingInvoiceDate ${periodEnd}
               AND (@allStores = 1 OR d.StoreID = @storeId)
-              AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)
+              ${textMatch(`p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like`)}
             GROUP BY p.ProductId, p.ProductCode, p.ProductName
           ),
           numbered AS (
@@ -1084,8 +1112,8 @@ app.get('/api/reports', requireAuth, async (req, res) => {
           FROM tblProductsStores ps
           INNER JOIN tblProducts p ON p.ProductId = ps.ProductID
           WHERE ps.ProductStock <> 0
-            AND (@allStores = 1 OR ps.StoreID = @storeId)
-            AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)`,
+            ${store == null ? '' : 'AND ps.StoreID = @storeId'}
+            ${textMatch(`p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like`)}`,
         pageSql: `
           WITH numbered AS (
             SELECT
@@ -1101,8 +1129,8 @@ app.get('/api/reports', requireAuth, async (req, res) => {
             INNER JOIN tblProducts p ON p.ProductId = ps.ProductID
             INNER JOIN tblStores s ON s.StoreID = ps.StoreID
             WHERE ps.ProductStock <> 0
-              AND (@allStores = 1 OR ps.StoreID = @storeId)
-              AND (@q = N'' OR p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)
+              ${store == null ? '' : 'AND ps.StoreID = @storeId'}
+              ${textMatch(`p.ProductName LIKE @like OR p.ProductCode LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like`)}
           )
           SELECT storeId, id, storeName, code, name, qty, totalRows
           FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn`
@@ -1259,9 +1287,15 @@ function priceLookup(table, cols, productExpr, priceType, ownerCol) {
   if (!hasCol(cols, 'Price') || !hasCol(cols, 'ProductID') || !hasCol(cols, 'PriceType')) return '0';
   const ranks = ['WHEN pr.Price > 0 THEN 1', 'ELSE 2'];
   if (hasCol(cols, ownerCol)) ranks.unshift(`WHEN pr.Price > 0 AND pr.${ownerCol} = 0 THEN 0`);
+  const index = table === 'tblClients_Products'
+    ? 'IX_Ramzy_ClientPrice_Product'
+    : table === 'tblSuppliers_Products'
+      ? 'IX_Ramzy_SupplierPrice_Product'
+      : '';
+  const hint = index ? ` WITH (INDEX(${index}))` : '';
   return `ISNULL((
     SELECT TOP 1 pr.Price
-    FROM ${table} pr
+    FROM ${table} pr${hint}
     WHERE pr.ProductID = ${productExpr} AND pr.PriceType = ${Number(priceType)}
     ORDER BY CASE ${ranks.join(' ')} END, pr.Price DESC
   ), 0)`;
@@ -1305,39 +1339,52 @@ app.get('/api/products', requireAuth, async (req, res) => {
       { name: 'q', type: sql.NVarChar(80), value: q },
       { name: 'like', type: sql.NVarChar(90), value: likeOf(q) }
     ];
-    const where = `FROM tblProducts WHERE @q = N'' OR ProductCode LIKE @like OR ProductName LIKE @like OR CAST(ProductId AS nvarchar(40)) LIKE @like`;
+    const where = q
+      ? `FROM tblProducts WHERE ProductCode LIKE @like OR ProductName LIKE @like OR CAST(ProductId AS nvarchar(40)) LIKE @like`
+      : `FROM tblProducts`;
     const [clientCols, supplierCols] = await Promise.all([
       tableCols('tblClients_Products'),
       tableCols('tblSuppliers_Products')
     ]);
     const saleSql = priceLookup('tblClients_Products', clientCols, 'n.id', 2, 'ClientID');
     const buySql = priceLookup('tblSuppliers_Products', supplierCols, 'n.id', 1, 'SupplierID');
+    const productOrder = `ORDER BY CASE WHEN ProductCode IS NULL OR LTRIM(RTRIM(ProductCode)) = '' THEN 1 ELSE 0 END, ProductCode`;
+    const productPage = start === 1
+      ? `SELECT TOP (@end)
+          ProductId AS id,
+          ISNULL(ProductCode, '') AS code,
+          ISNULL(ProductName, N'') AS name,
+          ISNULL(UnitName, N'') AS unitName,
+          ISNULL(ProductStock, 0) AS stock,
+          ISNULL(ReOrderLevel, 0) AS reorderLevel
+        ${where}
+        ${productOrder}`
+      : `SELECT
+          ProductId AS id,
+          ISNULL(ProductCode, '') AS code,
+          ISNULL(ProductName, N'') AS name,
+          ISNULL(UnitName, N'') AS unitName,
+          ISNULL(ProductStock, 0) AS stock,
+          ISNULL(ReOrderLevel, 0) AS reorderLevel
+        FROM (
+          SELECT
+            ProductId, ProductCode, ProductName, UnitName, ProductStock, ReOrderLevel,
+            ROW_NUMBER() OVER (${productOrder}) AS rn
+          ${where}
+        ) ranked
+        WHERE rn BETWEEN @start AND @end`;
     const [rows, total] = await Promise.all([
       runQuery(`
-        WITH numbered AS (
-          SELECT
-            ProductId AS id,
-            ISNULL(ProductCode, '') AS code,
-            ISNULL(ProductName, N'') AS name,
-            ISNULL(UnitName, N'') AS unitName,
-            ISNULL(ProductStock, 0) AS stock,
-            ISNULL(ReOrderLevel, 0) AS reorderLevel,
-            ROW_NUMBER() OVER (
-              ORDER BY CASE WHEN ProductCode IS NULL OR LTRIM(RTRIM(ProductCode)) = '' THEN 1 ELSE 0 END,
-                       ProductCode
-            ) AS rn
-          ${where}
-        )
         SELECT
           n.id, n.code, n.name, n.unitName, n.stock, n.reorderLevel,
           ${saleSql} AS salePrice,
           ${buySql} AS buyPrice
-        FROM numbered n WHERE n.rn BETWEEN @start AND @end ORDER BY n.rn
+        FROM (${productPage}) n
       `, filters.concat([
         { name: 'start', type: sql.Int, value: start },
         { name: 'end', type: sql.Int, value: end }
       ])),
-      cached(`products:${q}`, 20000, async () => Number((await runQuery(`SELECT COUNT(*) AS total ${where}`, filters))[0].total))
+      cached(`products:${q}`, 180000, async () => Number((await runQuery(`SELECT COUNT(*) AS total ${where}`, filters))[0].total))
     ]);
     res.json({ page, pageSize, total, rows });
   } catch (error) {
@@ -1436,7 +1483,7 @@ function productInputs(item, id) {
 
 function invalidateProducts() {
   for (const key of [...memoryCache.keys()]) {
-    if (key === 'dashboard' || key.startsWith('products:')) memoryCache.delete(key);
+    if (key === 'dashboard' || key.startsWith('dashboard:') || key.startsWith('products:')) memoryCache.delete(key);
   }
 }
 
@@ -1568,6 +1615,78 @@ app.get('/api/products/:id/purchases', requireAuth, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'تعذر تحميل تاريخ الشراء' });
+  }
+});
+
+app.get('/api/products/:id/moves', requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'المنتج غير موجود' });
+    const { page, pageSize, start, end } = paging(req);
+    const filters = [{ name: 'id', type: sql.Numeric(28, 0), value: id }];
+    const where = `FROM tblInventory i WHERE i.ProductID = @id`;
+    const [rows, total] = await Promise.all([
+      runQuery(`
+        WITH numbered AS (
+          SELECT
+            i.ID AS moveId,
+            ISNULL(i.InvoiceDate, i.DocumentDate) AS date,
+            ISNULL(i.InvoiceNo, 0) AS no,
+            CASE
+              WHEN i.TransactionID = 1 THEN N'شراء'
+              WHEN i.TransactionID = 2 THEN N'بيع'
+              WHEN i.TransactionID = 3 THEN N'مرتجع شراء'
+              WHEN i.TransactionID = 4 THEN N'مرتجع بيع'
+              WHEN i.TransactionID = 15 AND ISNULL(i.InQuantity, 0) > 0 AND ISNULL(i.OutQuantity, 0) = 0 THEN N'جرد دخول'
+              WHEN i.TransactionID = 15 THEN N'جرد خروج'
+              WHEN i.TransactionID = 16 AND ISNULL(i.InQuantity, 0) > 0 AND ISNULL(i.OutQuantity, 0) = 0 THEN N'تحويل دخول'
+              WHEN i.TransactionID = 16 THEN N'تحويل خروج'
+              ELSE N'حركة ' + CAST(i.TransactionID AS nvarchar(10))
+            END AS kind,
+            CASE
+              WHEN i.TransactionID IN (2, 4) THEN ISNULL(NULLIF(LTRIM(RTRIM(c.ClientName)), N''), N'')
+              WHEN i.TransactionID IN (1, 3) THEN ISNULL(NULLIF(LTRIM(RTRIM(s.SupplierName)), N''), N'')
+              ELSE N''
+            END AS party,
+            ISNULL(st.StoreName, N'') AS storeName,
+            ISNULL(i.InQuantity, 0) AS qtyIn,
+            ISNULL(i.OutQuantity, 0) AS qtyOut,
+            CASE
+              WHEN i.TransactionID IN (1, 3) THEN ISNULL(i.PurchasePricePerUnit, 0)
+              ELSE ISNULL(NULLIF(i.LotPricePerUnit, 0), ISNULL(i.PurchasePricePerUnit, 0))
+            END AS price,
+            CASE i.TransactionID WHEN 2 THEN ISNULL(si.SellingInvoiceID, 0) WHEN 1 THEN ISNULL(pi.PurchaseInvoiceID, 0) ELSE 0 END AS docId,
+            CASE i.TransactionID WHEN 2 THEN N'sales' WHEN 1 THEN N'purchases' ELSE N'' END AS openAs,
+            ROW_NUMBER() OVER (ORDER BY ISNULL(i.InvoiceDate, i.DocumentDate) DESC, i.ID DESC) AS rn
+          FROM tblInventory i
+          LEFT JOIN tblClients c ON c.ClientId = i.ClientID AND i.TransactionID IN (2, 4)
+          LEFT JOIN tblSuppliers s ON s.SupplierID = i.SupplierID AND i.TransactionID IN (1, 3)
+          LEFT JOIN tblStores st ON st.StoreID = i.StoreID
+          LEFT JOIN tblSellingInvoice si ON i.TransactionID = 2 AND si.SellingInvoiceNo = i.InvoiceNo
+          LEFT JOIN tblPurchaseInvoice pi ON i.TransactionID = 1 AND pi.PurchaseInvoiceNo = i.InvoiceNo
+          WHERE i.ProductID = @id
+        )
+        SELECT moveId, date, no, kind, party, storeName, qtyIn, qtyOut, price, docId, openAs
+        FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn
+      `, filters.concat([
+        { name: 'start', type: sql.Int, value: start },
+        { name: 'end', type: sql.Int, value: end }
+      ])),
+      runQuery(`SELECT COUNT(*) AS total ${where}`, filters)
+    ]);
+    res.json({
+      page,
+      pageSize,
+      total: Number(total[0].total),
+      rows: rows.map((row) => ({
+        ...row,
+        docId: Number(row.docId) || 0,
+        openAs: Number(row.docId) ? row.openAs : ''
+      }))
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'تعذر تحميل حركات المنتج' });
   }
 });
 
@@ -1827,6 +1946,224 @@ app.get('/api/suppliers/:id/purchases', requireAuth, async (req, res) => {
   }
 });
 
+function profilePage(raw) {
+  const parsed = Number(raw);
+  const page = Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : 1;
+  const pageSize = 20;
+  return { page, pageSize, start: (page - 1) * pageSize + 1, end: page * pageSize };
+}
+
+function profilePartyId(raw) {
+  if (!/^\d+$/.test(String(raw ?? '').trim())) return null;
+  const id = Number(raw);
+  if (!Number.isSafeInteger(id) || id < 0) return null;
+  return id;
+}
+
+function profileAmount(value) {
+  return Number(value || 0);
+}
+
+function profileBalances(rows, accountBalance, newerSigned) {
+  let skipped = profileAmount(newerSigned);
+  return rows.map((row) => {
+    const balance = accountBalance - skipped;
+    skipped += profileAmount(row.signed);
+    return {
+      date: row.date,
+      text: String(row.text || '').trim(),
+      debit: profileAmount(row.debit),
+      credit: profileAmount(row.credit),
+      balance
+    };
+  });
+}
+
+async function partyProfile(kind, id, invoicePage, statementPage) {
+  const client = kind === 'client';
+  const partyTable = client ? 'tblClients' : 'tblSuppliers';
+  const partyIdCol = client ? 'ClientId' : 'SupplierID';
+  const partyName = client ? 'ClientName' : 'SupplierName';
+  const invoiceTable = client ? 'tblSellingInvoice' : 'tblPurchaseInvoice';
+  const invoiceParty = client ? 'ClientID' : 'SupplierID';
+  const amountCol = client ? 'SellingInvoiceTotalAmount' : 'PurchaseInvoiceTotalAmount';
+  const paidCol = client ? 'TotalCollectedAmount' : 'TotalPaiedAmount';
+  const dueCol = client ? 'NotCollectedAmount' : 'NotPaiedAmount';
+  const idCol = client ? 'SellingInvoiceID' : 'PurchaseInvoiceID';
+  const noCol = client ? 'SellingInvoiceNo' : 'PurchaseInvoiceNo';
+  const dateCol = client ? 'SellingInvoiceDate' : 'PurchaseInvoiceDate';
+  const signed = client
+    ? '(ISNULL(d.Debit, 0) - ISNULL(d.Credit, 0))'
+    : '(ISNULL(d.Credit, 0) - ISNULL(d.Debit, 0))';
+  const printing = invoicePage === 'print';
+  const invoices = printing ? { page: 1, pageSize: 2000, start: 1, end: 2000 } : profilePage(invoicePage);
+  const statement = printing ? { page: 1, pageSize: 2000, start: 1, end: 2000 } : profilePage(statementPage);
+  const invoiceFrom = `FROM ${invoiceTable} WHERE ${invoiceParty} = @id`;
+  const movement = `
+    FROM tblJournalEntryDetails d
+    INNER JOIN tblJournalEntry j ON j.JournalEntryID = d.JournalEntryID
+    WHERE d.AccCode = (
+      SELECT AccCode FROM ${partyTable}
+      WHERE ${partyIdCol} = @id AND LTRIM(RTRIM(ISNULL(AccCode, N''))) <> N''
+    )`;
+  const invoiceList = invoices.start === 1
+    ? `SELECT TOP (@invoiceEnd)
+        ${idCol} AS id, ${noCol} AS no, ${dateCol} AS date,
+        ISNULL(${amountCol}, 0) AS amount, ISNULL(${paidCol}, 0) AS paid, ISNULL(${dueCol}, 0) AS due,
+        ISNULL(InsertedBy, N'') AS byName
+      ${invoiceFrom}
+      ORDER BY ${dateCol} DESC, ${idCol} DESC`
+    : `WITH numbered AS (
+        SELECT ${idCol} AS id, ${noCol} AS no, ${dateCol} AS date,
+          ISNULL(${amountCol}, 0) AS amount, ISNULL(${paidCol}, 0) AS paid, ISNULL(${dueCol}, 0) AS due,
+          ISNULL(InsertedBy, N'') AS byName,
+          ROW_NUMBER() OVER (ORDER BY ${dateCol} DESC, ${idCol} DESC) AS rn
+        ${invoiceFrom}
+      )
+      SELECT id, no, date, amount, paid, due, byName
+      FROM numbered WHERE rn BETWEEN @invoiceStart AND @invoiceEnd ORDER BY rn`;
+  const statementList = statement.start === 1
+    ? `SELECT TOP (@statementEnd)
+        j.JournalEntryDate AS date,
+        ISNULL(d.Debit, 0) AS debit,
+        ISNULL(d.Credit, 0) AS credit,
+        ${signed} AS signed,
+        CASE
+          WHEN LTRIM(RTRIM(ISNULL(d.JEPartyDis, N''))) = N'' THEN ISNULL(j.JournalEntryDis, N'')
+          ELSE d.JEPartyDis
+        END AS text
+      ${movement}
+      ORDER BY j.JournalEntryDate DESC, j.JournalEntryID DESC, d.Ser DESC`
+    : `WITH lines AS (
+        SELECT
+          j.JournalEntryDate AS date,
+          ISNULL(d.Debit, 0) AS debit,
+          ISNULL(d.Credit, 0) AS credit,
+          ${signed} AS signed,
+          CASE
+            WHEN LTRIM(RTRIM(ISNULL(d.JEPartyDis, N''))) = N'' THEN ISNULL(j.JournalEntryDis, N'')
+            ELSE d.JEPartyDis
+          END AS text,
+          ROW_NUMBER() OVER (ORDER BY j.JournalEntryDate DESC, j.JournalEntryID DESC, d.Ser DESC) AS rn
+        ${movement}
+      )
+      SELECT date, debit, credit, signed, text
+      FROM lines
+      WHERE rn BETWEEN @statementStart AND @statementEnd
+      ORDER BY rn`;
+  const sets = await runSets(`
+    SELECT ${partyIdCol} AS id, ISNULL(${partyName}, N'') AS name, ISNULL(PhoneNo, N'') AS phone,
+      ISNULL(MobilNo, N'') AS mobile, ISNULL(Address, N'') AS address, ISNULL(AccCode, N'') AS accCode
+    FROM ${partyTable} WHERE ${partyIdCol} = @id;
+
+    SELECT COUNT(*) AS count,
+      ISNULL(SUM(${amountCol}), 0) AS total,
+      ISNULL(SUM(${paidCol}), 0) AS paid,
+      ISNULL(SUM(${dueCol}), 0) AS due
+    ${invoiceFrom};
+
+    ${invoiceList};
+
+    SELECT COUNT(*) AS total, ISNULL(SUM(${signed}), 0) AS balance
+    ${movement};
+
+    ${statementList};
+
+    ${statement.start > 1 ? `
+      WITH lines AS (
+        SELECT ${signed} AS signed,
+          ROW_NUMBER() OVER (ORDER BY j.JournalEntryDate DESC, j.JournalEntryID DESC, d.Ser DESC) AS rn
+        ${movement}
+      )
+      SELECT ISNULL(SUM(signed), 0) AS newerSigned FROM lines WHERE rn < @statementStart;
+    ` : 'SELECT CAST(0 AS float) AS newerSigned;'}
+  `, [
+    { name: 'id', type: sql.Numeric(18, 0), value: id },
+    { name: 'invoiceStart', type: sql.Int, value: invoices.start },
+    { name: 'invoiceEnd', type: sql.Int, value: invoices.end },
+    { name: 'statementStart', type: sql.Int, value: statement.start },
+    { name: 'statementEnd', type: sql.Int, value: statement.end }
+  ]);
+  const partyRow = sets[0] && sets[0][0];
+  if (!partyRow) return null;
+  const party = {
+    id: profileAmount(partyRow.id),
+    name: String(partyRow.name || '').trim(),
+    phone: String(partyRow.phone || '').trim(),
+    mobile: String(partyRow.mobile || '').trim(),
+    address: String(partyRow.address || '').trim(),
+    accCode: String(partyRow.accCode || '').trim()
+  };
+  const summaryRow = (sets[1] && sets[1][0]) || {};
+  const invoiceRows = sets[2] || [];
+  let account = {
+    page: statement.page,
+    pageSize: statement.pageSize,
+    total: 0,
+    balance: null,
+    rows: [],
+    reason: 'no-account'
+  };
+  if (party.accCode) {
+    const head = (sets[3] && sets[3][0]) || {};
+    const total = profileAmount(head.total);
+    const balance = profileAmount(head.balance);
+    const pageRows = sets[4] || [];
+    const newerSigned = profileAmount(sets[5] && sets[5][0] ? sets[5][0].newerSigned : 0);
+    account = {
+      page: statement.page,
+      pageSize: statement.pageSize,
+      total,
+      balance: total ? balance : 0,
+      rows: profileBalances(pageRows, balance, newerSigned),
+      truncated: printing && total > pageRows.length,
+      reason: total ? '' : 'empty'
+    };
+  }
+  return {
+    party,
+    summary: {
+      count: profileAmount(summaryRow.count),
+      total: profileAmount(summaryRow.total),
+      paid: profileAmount(summaryRow.paid),
+      due: profileAmount(summaryRow.due)
+    },
+    invoices: {
+      page: invoices.page,
+      pageSize: printing ? invoiceRows.length : invoices.pageSize,
+      total: profileAmount(summaryRow.count),
+      truncated: printing && profileAmount(summaryRow.count) > invoiceRows.length,
+      rows: invoiceRows.map((row) => ({
+        id: profileAmount(row.id),
+        no: profileAmount(row.no),
+        date: row.date,
+        amount: profileAmount(row.amount),
+        paid: profileAmount(row.paid),
+        due: profileAmount(row.due),
+        byName: String(row.byName || '').trim()
+      }))
+    },
+    statement: account
+  };
+}
+
+async function sendPartyProfile(req, res, kind) {
+  const missing = kind === 'client' ? 'العميل غير موجود' : 'المورد غير موجود';
+  try {
+    const id = profilePartyId(req.params.id);
+    if (id === null) return res.status(400).json({ error: missing });
+    const profile = await partyProfile(kind, id, req.query.print === '1' ? 'print' : req.query.invoicePage, req.query.statementPage);
+    if (!profile) return res.status(404).json({ error: missing });
+    res.json(profile);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'تعذر تحميل الملف' });
+  }
+}
+
+app.get('/api/clients/:id/profile', requireAuth, (req, res) => sendPartyProfile(req, res, 'client'));
+app.get('/api/suppliers/:id/profile', requireAuth, (req, res) => sendPartyProfile(req, res, 'supplier'));
+
 app.get('/api/sales', requireAuth, async (req, res) => {
   try {
     const { page, pageSize, start, end } = paging(req);
@@ -2024,8 +2361,8 @@ app.get('/api/stock', requireAuth, async (req, res) => {
       INNER JOIN tblProducts p ON p.ProductId = ps.ProductID
       INNER JOIN tblStores s ON s.StoreID = ps.StoreID
       WHERE ps.ProductStock <> 0
-        AND (@allStores = 1 OR ps.StoreID = @storeId)
-        AND (@q = N'' OR p.ProductCode LIKE @like OR p.ProductName LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)`;
+        ${store == null ? '' : 'AND ps.StoreID = @storeId'}
+        ${q ? `AND (p.ProductCode LIKE @like OR p.ProductName LIKE @like OR CAST(p.ProductId AS nvarchar(40)) LIKE @like)` : ''}`
     const pageSql = start === 1
       ? `SELECT TOP (@pageSize)
             ps.StoreID AS storeId,

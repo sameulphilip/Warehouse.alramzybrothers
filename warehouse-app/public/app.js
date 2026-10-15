@@ -29,8 +29,8 @@ const sections = [
   { id: 'sales', label: 'فواتير البيع', title: 'فواتير البيع', subtitle: 'اضغط الفاتورة لعرض الأصناف' },
   { id: 'newPurchase', label: 'فاتورة شراء جديدة', title: 'فاتورة شراء جديدة', subtitle: 'تسجّل الفاتورة والمخزون والقيد مثل البرنامج الأصلي' },
   { id: 'purchases', label: 'فواتير الشراء', title: 'فواتير الشراء', subtitle: 'اضغط الفاتورة لعرض الأصناف' },
-  { id: 'clients', label: 'العملاء', title: 'العملاء', subtitle: 'اضغط العميل لعرض كل فواتير البيع' },
-  { id: 'suppliers', label: 'الموردين', title: 'الموردين', subtitle: 'اضغط المورد لعرض كل فواتير الشراء' },
+  { id: 'clients', label: 'العملاء', title: 'العملاء', subtitle: 'اضغط العميل لعرض ملفه وفواتيره وحسابه' },
+  { id: 'suppliers', label: 'الموردين', title: 'الموردين', subtitle: 'اضغط المورد لعرض ملفه وفواتيره وحسابه' },
   { id: 'stores', label: 'المخازن', title: 'المخازن', subtitle: 'فروع ومخازن الشركة' },
   { id: 'activity', label: 'سجل الحركات', title: 'سجل الحركات', subtitle: 'كل حساب واللي عمله: فواتير، أسعار، وبحث' },
   { id: 'accounts', label: 'إدارة الحسابات', title: 'إدارة الحسابات', subtitle: 'حسابات الدخول وصلاحيات المديرين', admin: true }
@@ -168,8 +168,12 @@ async function openSection(id) {
   content.innerHTML = '<div class="skeleton"><span></span><span></span><span></span><span></span></div>';
   try {
     if (id === 'dashboard') {
-      if (!state.stores.length) state.stores = (await api('/api/stores')).stores;
-      return renderDashboard(await api(`/api/dashboard?from=${encodeURIComponent(state.dashFrom || '')}&to=${encodeURIComponent(state.dashTo || '')}&storeId=${encodeURIComponent(state.dashStore ?? '')}`));
+      const [storesData, data] = await Promise.all([
+        state.stores.length ? Promise.resolve(null) : api('/api/stores'),
+        api(`/api/dashboard?from=${encodeURIComponent(state.dashFrom || '')}&to=${encodeURIComponent(state.dashTo || '')}&storeId=${encodeURIComponent(state.dashStore ?? '')}`)
+      ]);
+      if (storesData) state.stores = storesData.stores;
+      return renderDashboard(data);
     }
     if (id === 'reports') {
       if (!state.stores.length) state.stores = (await api('/api/stores')).stores;
@@ -256,10 +260,32 @@ function bindPager(total, reload) {
   document.getElementById('next').onclick = () => { if (state.page < pages) { state.page += 1; reload(); } };
 }
 
-const numericLabels = new Set(['الإجمالي', 'المتبقي', 'المدفوع', 'سعر البيع', 'سعر الشراء', 'الرصيد', 'حد الطلب', 'الكمية', 'السعر', 'المرتجع', 'كمية المرتجع', 'الفواتير', 'داخل', 'خارج', 'رقم الصنف']);
+const numericLabels = new Set(['الإجمالي', 'المتبقي', 'المدفوع', 'سعر البيع', 'سعر الشراء', 'الرصيد', 'حد الطلب', 'الكمية', 'السعر', 'المرتجع', 'كمية المرتجع', 'الفواتير', 'داخل', 'خارج', 'رقم الصنف', 'مدين', 'دائن']);
+
+function columnStoreKey(columns) {
+  return `ramzy-cols:${columns.map((column) => column.label).join('\u001f')}`;
+}
+
+function savedColumnWidths(columns) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(columnStoreKey(columns)) || '');
+    if (!Array.isArray(parsed) || parsed.length !== columns.length) return null;
+    const widths = parsed.map((value) => Math.round(Number(value)));
+    if (widths.some((value) => !Number.isFinite(value) || value < 56 || value > 1200)) return null;
+    return widths;
+  } catch (error) {
+    return null;
+  }
+}
 
 function grid(columns, rows) {
-  const head = columns.map((column) => `<span class="${numericLabels.has(column.label) ? 'num' : ''}">${column.label}</span>`).join('');
+  const saved = savedColumnWidths(columns);
+  const defaultCols = columns.map((column) => column.width).join(' ');
+  const cols = saved ? saved.map((value) => `${value}px`).join(' ') : defaultCols;
+  const head = columns.map((column, index) => {
+    const numeric = numericLabels.has(column.label) ? ' num' : '';
+    return `<span data-col="${esc(column.label)}" class="${numeric.trim()}"><b class="col-label">${column.label}</b><i class="col-resize" data-index="${index}" title="اسحب لتغيير العرض، واضغط مرتين للرجوع"></i></span>`;
+  }).join('');
   const body = rows.length
     ? rows.map((row) => {
       const cells = columns.map((column, index) => {
@@ -269,8 +295,55 @@ function grid(columns, rows) {
       return `<div class="data-row${row.clickable ? ' clickable' : ''}${row.card ? ' product-card' : ''}" ${row.attrs || ''}>${cells}</div>`;
     }).join('')
     : '<div class="empty">لا توجد نتائج</div>';
-  return `<div class="data" style="--cols:${columns.map((column) => column.width).join(' ')}"><div class="data-head">${head}</div>${body}</div>`;
+  return `<div class="data${saved ? ' is-resized' : ''}" data-cols-key="${esc(columnStoreKey(columns))}" data-default-cols="${esc(defaultCols)}" style="--cols:${cols}"><div class="data-head">${head}</div>${body}</div>`;
 }
+
+function bindColumnResize() {
+  let drag = null;
+  const finish = () => {
+    if (!drag) return;
+    drag.table.classList.remove('resizing');
+    if (drag.live) localStorage.setItem(drag.table.dataset.colsKey, JSON.stringify(drag.live));
+    drag = null;
+  };
+  document.addEventListener('pointerdown', (event) => {
+    const handle = event.target.closest?.('.col-resize');
+    if (!handle || !window.matchMedia('(min-width: 981px)').matches) return;
+    const table = handle.closest('.data');
+    const head = handle.closest('.data-head');
+    if (!table || !head) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const index = Number(handle.dataset.index);
+    drag = {
+      table,
+      index,
+      startX: event.clientX,
+      widths: [...head.children].map((cell) => Math.round(cell.getBoundingClientRect().width))
+    };
+    table.classList.add('resizing');
+  });
+  document.addEventListener('pointermove', (event) => {
+    if (!drag) return;
+    const widths = drag.widths.slice();
+    widths[drag.index] = Math.max(56, Math.min(1200, Math.round(drag.widths[drag.index] + (drag.startX - event.clientX))));
+    drag.live = widths;
+    drag.table.style.setProperty('--cols', widths.map((value) => `${value}px`).join(' '));
+    drag.table.classList.add('is-resized');
+  });
+  document.addEventListener('pointerup', finish);
+  document.addEventListener('pointercancel', finish);
+  document.addEventListener('dblclick', (event) => {
+    const handle = event.target.closest?.('.col-resize');
+    if (!handle) return;
+    const table = handle.closest('.data');
+    if (!table) return;
+    localStorage.removeItem(table.dataset.colsKey);
+    table.classList.remove('is-resized');
+    table.style.setProperty('--cols', table.dataset.defaultCols);
+  });
+}
+bindColumnResize();
 
 function bindRows(reloadKind) {
   content.querySelectorAll('.data-row.clickable').forEach((row) => {
@@ -859,6 +932,64 @@ function field(label, control, wide) {
   return `<label class="${wide ? 'wide' : ''}">${label}${control}</label>`;
 }
 
+let productViewToken = 0;
+
+function productHistoryMeta(kind) {
+  return kind === 'purchases'
+    ? { title: 'تاريخ الشراء', party: 'المورد', empty: 'لا توجد مشتريات لهذا المنتج', unit: 'عملية شراء', pane: 'buyPane' }
+    : { title: 'تاريخ البيع', party: 'العميل', empty: 'لا توجد مبيعات لهذا المنتج', unit: 'عملية بيع', pane: 'salePane' };
+}
+
+async function fillProductHistory(kind, id, product, page, token) {
+  const view = productHistoryMeta(kind);
+  try {
+    const data = await api(`/api/products/${id}/${kind}?page=${page}&pageSize=12`);
+    if (token !== productViewToken) return;
+    const pane = document.getElementById(view.pane);
+    if (!pane) return;
+    const pages = Math.max(1, Math.ceil(Number(data.total) / 12));
+    const rows = grid(
+      [
+        { label: 'التاريخ', width: '0.9fr' },
+        { label: view.party, width: '1.3fr' },
+        { label: 'الكمية', width: '0.6fr' },
+        { label: 'السعر', width: '0.7fr' },
+        { label: 'الفاتورة', width: '0.6fr' }
+      ],
+      data.rows.map((row) => ({
+        clickable: true,
+        attrs: `data-id="${row.id}"`,
+        cells: [dateText(row.date), esc(row.name), num(row.qty), money(row.price), row.no]
+      }))
+    );
+    pane.innerHTML = `<h3>${view.title}<span>${num(data.total)} ${view.unit}</span></h3>
+      ${data.rows.length ? rows : `<div class="empty">${view.empty}</div>`}
+      <div class="pager">
+        <button type="button" data-step="-1" ${page <= 1 ? 'disabled' : ''}>السابق</button>
+        <button type="button" data-step="1" ${page >= pages ? 'disabled' : ''}>التالي</button>
+      </div>`;
+    pane.querySelectorAll('[data-step]').forEach((button) => {
+      button.onclick = () => {
+        const next = page + Number(button.dataset.step);
+        if (next >= 1 && next <= pages) fillProductHistory(kind, id, product, next, token);
+      };
+    });
+    pane.querySelectorAll('.data-row.clickable').forEach((row) => {
+      row.onclick = async () => {
+        await openInvoice(kind, row.dataset.id);
+        const back = () => openProductForm(id);
+        const close = document.getElementById('closeDrawer');
+        if (close) close.onclick = back;
+        drawer.onclick = (event) => { if (event.target === drawer) back(); };
+      };
+    });
+  } catch (error) {
+    if (token !== productViewToken) return;
+    const pane = document.getElementById(view.pane);
+    if (pane) pane.innerHTML = `<h3>${view.title}</h3><div class="error">${esc(error.message)}</div>`;
+  }
+}
+
 async function openProductForm(id) {
   let loaded = null;
   let inquiries = [];
@@ -881,14 +1012,15 @@ async function openProductForm(id) {
   const options = (list, selected) => list.map((item) =>
     `<option value="${item.id}" ${Number(item.id) === Number(selected) ? 'selected' : ''}>${item.name}</option>`
   ).join('');
+  const token = ++productViewToken;
   drawer.classList.remove('hidden');
-  drawer.innerHTML = `<article class="sheet">
+  const sheet = `<article class="sheet">
     <header>
       <div><h2>${id ? 'تعديل المنتج' : 'منتج جديد'}</h2><p>${id ? esc(productCode(product.code, product.id)) + ' · ' + esc(product.name) : 'يُحفظ في دليل المنتجات وقائمة سعر البيع'}</p></div>
       <button id="closeDrawer" class="ghost" type="button">إغلاق</button>
     </header>
     <form id="productForm" class="form-grid">
-      ${id ? '<button id="saleHistory" class="history-btn wide" type="button">تاريخ البيع</button><button id="buyHistory" class="history-btn wide" type="button">تاريخ الشراء</button>' : ''}
+      ${id ? `<div class="wide history-row"><button id="saleHistory" class="history-btn" type="button">تاريخ البيع</button><button id="buyHistory" class="history-btn" type="button">تاريخ الشراء</button><button id="allMoves" class="history-btn" type="button">جميع الحركات</button></div>` : ''}
       ${id ? `<div class="wide note"><strong>استعلامات السعر</strong>${inquiries.map((row) => `<div>${esc(row.name)} · ${whenText(row.at)}</div>`).join('') || '<div>لا يوجد</div>'}</div>` : ''}
       ${id ? field('رقم الصنف', `<input value="${esc(product.id)}" readonly>`) : ''}
       ${field('الكود', `<input id="pCode" value="${esc(product.code)}" maxlength="50">`)}
@@ -915,12 +1047,18 @@ async function openProductForm(id) {
     <p class="note">سعر البيع وسعر الشراء هما السعران الأساسيان في البرنامج. الرصيد يتغير من الفواتير فقط.</p>
     <div id="productError" class="error"></div>
   </article>`;
+  drawer.innerHTML = id
+    ? `<div class="product-desk">${sheet}<aside class="product-side"><section class="product-pane" id="salePane"><h3>تاريخ البيع</h3><div class="skeleton"><span></span></div></section><section class="product-pane" id="buyPane"><h3>تاريخ الشراء</h3><div class="skeleton"><span></span></div></section></aside></div>`
+    : sheet;
   const close = () => drawer.classList.add('hidden');
   document.getElementById('closeDrawer').onclick = close;
   document.getElementById('closeDrawer2').onclick = close;
   if (id) {
     document.getElementById('saleHistory').onclick = () => openProductHistory('sales', id, product);
     document.getElementById('buyHistory').onclick = () => openProductHistory('purchases', id, product);
+    document.getElementById('allMoves').onclick = () => openProductMoves(id, product);
+    fillProductHistory('sales', id, product, 1, token);
+    fillProductHistory('purchases', id, product, 1, token);
   }
   drawer.onclick = (event) => { if (event.target === drawer) close(); };
   document.getElementById('productForm').onsubmit = async (event) => {
@@ -1011,6 +1149,60 @@ async function openProductHistory(kind, id, product, page = 1) {
     });
   } catch (error) {
     drawer.innerHTML = `<article class="sheet"><header><h2>${view.title}</h2><button id="closeDrawer" class="ghost" type="button">إغلاق</button></header><div class="error">${esc(error.message)}</div></article>`;
+    document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
+  }
+}
+
+async function openProductMoves(id, product, page = 1) {
+  drawer.classList.remove('hidden');
+  drawer.innerHTML = `<article class="sheet"><header><div><h2>جميع الحركات</h2><p>${esc(productCode(product.code, id))} · ${esc(product.name)}</p></div><button id="closeDrawer" class="ghost" type="button">إغلاق</button></header><div class="skeleton"><span></span><span></span><span></span></div></article>`;
+  document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
+  try {
+    const data = await api(`/api/products/${id}/moves?page=${page}&pageSize=20`);
+    const pages = Math.max(1, Math.ceil(data.total / 20));
+    const rows = grid(
+      [
+        { label: 'التاريخ', width: '0.8fr' },
+        { label: 'الحركة', width: '0.8fr' },
+        { label: 'الطرف', width: '1.1fr' },
+        { label: 'المخزن', width: '0.9fr' },
+        { label: 'داخل', width: '0.5fr' },
+        { label: 'خارج', width: '0.5fr' },
+        { label: 'المستند', width: '0.5fr' }
+      ],
+      data.rows.map((row) => ({
+        clickable: Boolean(row.openAs && row.docId),
+        attrs: `data-id="${row.docId || ''}" data-open="${esc(row.openAs || '')}"`,
+        cells: [dateText(row.date), esc(row.kind), esc(row.party || '—'), esc(row.storeName || '—'), num(row.qtyIn), num(row.qtyOut), row.no || '—']
+      }))
+    );
+    drawer.innerHTML = `<article class="sheet">
+      <header>
+        <div><h2>جميع الحركات</h2><p>${esc(productCode(product.code, id))} · ${esc(product.name)}</p></div>
+        <button id="closeDrawer" class="ghost" type="button">إغلاق</button>
+      </header>
+      <p class="meta"><span>${num(data.total)} حركة</span></p>
+      ${data.rows.length ? rows : '<div class="empty">لا توجد حركات لهذا المنتج</div>'}
+      <div class="pager">
+        <button type="button" id="histPrev" ${page <= 1 ? 'disabled' : ''}>السابق</button>
+        <button type="button" id="histNext" ${page >= pages ? 'disabled' : ''}>التالي</button>
+      </div>
+      <button id="backProduct" class="ghost" type="button">رجوع للمنتج</button>
+    </article>`;
+    document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
+    document.getElementById('backProduct').onclick = () => openProductForm(id);
+    document.getElementById('histPrev').onclick = () => { if (page > 1) openProductMoves(id, product, page - 1); };
+    document.getElementById('histNext').onclick = () => { if (page < pages) openProductMoves(id, product, page + 1); };
+    drawer.onclick = (event) => { if (event.target === drawer) drawer.classList.add('hidden'); };
+    drawer.querySelectorAll('.data-row.clickable').forEach((row) => {
+      row.onclick = async () => {
+        await openInvoice(row.dataset.open, row.dataset.id);
+        const close = document.getElementById('closeDrawer');
+        if (close) close.onclick = () => openProductMoves(id, product, page);
+      };
+    });
+  } catch (error) {
+    drawer.innerHTML = `<article class="sheet"><header><h2>جميع الحركات</h2><button id="closeDrawer" class="ghost" type="button">إغلاق</button></header><div class="error">${esc(error.message)}</div></article>`;
     document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
   }
 }
@@ -1158,20 +1350,95 @@ function renderSimple(kind, data, rows) {
   bindPager(data.total, () => openSection(kind));
   if (kind === 'suppliers' || kind === 'clients') {
     content.querySelectorAll('.data-row.clickable').forEach((row) => {
-      row.onclick = () => (kind === 'suppliers' ? openSupplierPurchases : openClientSales)(row.dataset.id, row.dataset.name, row.dataset.acc);
+      row.onclick = () => openPartyProfile(kind, row.dataset.id);
     });
   }
 }
 
-async function openSupplierPurchases(id, name, acc, page = 1) {
+function profilePrintHtml(kind, data) {
+  const supplier = kind === 'suppliers';
+  const title = supplier ? 'ملف مورد' : 'ملف عميل';
+  const party = data.party || {};
+  const printedAt = new Date().toLocaleString('ar-EG-u-nu-latn', { dateStyle: 'medium', timeStyle: 'short' });
+  const facts = [
+    ['الاسم', party.name || '—'],
+    ['التليفون', party.phone || '—'],
+    ['الموبايل', party.mobile || '—'],
+    ['الحساب', party.accCode || '—']
+  ];
+  if (party.address) facts.push(['العنوان', party.address]);
+  const totals = [
+    ['عدد الفواتير', num(data.summary?.count || 0)],
+    ['الإجمالي', money(data.summary?.total)],
+    ['المدفوع', money(data.summary?.paid)],
+    ['المتبقي', money(data.summary?.due)]
+  ];
+  const invoiceRows = data.invoices?.rows || [];
+  const invoiceBody = invoiceRows.length
+    ? invoiceRows.map((row) => `<tr><td>${esc(row.no)}</td><td>${dateText(row.date)}</td><td>${whoText(row.byName)}</td><td class="num">${money(row.amount)}</td><td class="num">${money(row.paid)}</td><td class="num">${money(row.due)}</td></tr>`).join('')
+    : '<tr><td class="print-empty" colspan="6">لا توجد فواتير</td></tr>';
+  const statement = data.statement || { reason: 'no-account' };
+  let statementBlock = '<p class="print-note">لا يوجد كود حساب</p>';
+  if (statement.reason === 'empty') {
+    statementBlock = '<p class="print-note">لا توجد حركات على الحساب. الرصيد 0</p>';
+  } else if (statement.reason !== 'no-account') {
+    const rows = statement.rows || [];
+    const body = rows.length
+      ? rows.map((row) => `<tr><td>${dateText(row.date)}</td><td>${esc(row.text || '—')}</td><td class="num">${money(row.debit)}</td><td class="num">${money(row.credit)}</td><td class="num">${money(row.balance)}</td></tr>`).join('')
+      : '<tr><td class="print-empty" colspan="5">لا توجد حركات</td></tr>';
+    statementBlock = `<p class="print-note">رصيد الحساب ${money(statement.balance)}</p>
+      <table><thead><tr><th>التاريخ</th><th>البيان</th><th class="num">مدين</th><th class="num">دائن</th><th class="num">الرصيد</th></tr></thead><tbody>${body}</tbody></table>
+      ${statement.truncated ? '<p class="print-note">المطبوع أحدث 2000 حركة</p>' : ''}`;
+  }
+  return `<article class="print-sheet">
+    <header class="print-brand">
+      <img src="/logo.png?v=20261009a" alt="">
+      <div>
+        <p class="print-kicker">AL RAMZY BROTHERS</p>
+        <strong>الرمزي إخوان</strong>
+        <span>إدارة فروع الرمزي</span>
+      </div>
+      <div class="print-title"><h1>${title}</h1><p>${esc(party.name || '')}</p></div>
+    </header>
+    <div class="print-facts">${facts.map(([label, value]) => `<div><span>${label}</span><strong>${esc(value)}</strong></div>`).join('')}</div>
+    <div class="print-totals">${totals.map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join('')}</div>
+    <h2>الفواتير</h2>
+    <table><thead><tr><th>الرقم</th><th>التاريخ</th><th>المستخدم</th><th class="num">الإجمالي</th><th class="num">المدفوع</th><th class="num">المتبقي</th></tr></thead><tbody>${invoiceBody}</tbody></table>
+    ${data.invoices?.truncated ? '<p class="print-note">المطبوع أحدث 2000 فاتورة</p>' : ''}
+    <h2>كشف الحساب</h2>
+    ${statementBlock}
+    <footer class="print-foot"><span>الرمزي إخوان · ${title}</span><span>طُبعت ${esc(printedAt)}</span></footer>
+  </article>`;
+}
+
+function profilePager(prefix, page, pages) {
+  return `<div class="pager">
+    <button type="button" id="${prefix}Prev" ${page <= 1 ? 'disabled' : ''}>السابق</button>
+    <button type="button" id="${prefix}Next" ${page >= pages ? 'disabled' : ''}>التالي</button>
+  </div>`;
+}
+
+async function openPartyProfile(kind, id, invoicePage = 1, statementPage = 1) {
+  const supplier = kind === 'suppliers';
+  const title = supplier ? 'ملف المورد' : 'ملف العميل';
+  const invoiceKind = supplier ? 'purchases' : 'sales';
+  const emptyInvoices = supplier ? 'لا توجد فواتير شراء لهذا المورد' : 'لا توجد فواتير بيع لهذا العميل';
   drawer.classList.remove('hidden');
-  drawer.innerHTML = `<article class="sheet"><header><div><h2>فواتير الشراء</h2><p>${esc(name)}</p></div><button id="closeDrawer" class="ghost" type="button">إغلاق</button></header><div class="skeleton"><span></span><span></span><span></span></div></article>`;
+  drawer.innerHTML = `<article class="sheet popup"><header><div><h2>${title}</h2></div><button id="closeDrawer" class="ghost" type="button">إغلاق</button></header><div class="skeleton"><span></span><span></span><span></span></div></article>`;
   document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
   try {
-    const data = await api(`/api/suppliers/${id}/purchases?page=${page}&pageSize=20`);
-    const supplier = data.supplier || { name, accCode: acc };
-    const pages = Math.max(1, Math.ceil(data.total / 20));
-    const rows = grid(
+    const path = supplier ? 'suppliers' : 'clients';
+    const data = await api(`/api/${path}/${id}/profile?invoicePage=${invoicePage}&statementPage=${statementPage}`);
+    const party = data.party || {};
+    const facts = [
+      party.phone ? `<span>تليفون ${esc(party.phone)}</span>` : '',
+      party.mobile ? `<span>موبايل ${esc(party.mobile)}</span>` : '',
+      party.address ? `<span>${esc(party.address)}</span>` : '',
+      party.accCode ? `<span>حساب ${esc(party.accCode)}</span>` : ''
+    ].filter(Boolean).join('');
+    const invoicePages = Math.max(1, Math.ceil((data.invoices?.total || 0) / 20));
+    const statementPages = Math.max(1, Math.ceil((data.statement?.total || 0) / 20));
+    const invoiceRows = grid(
       [
         { label: 'الرقم', width: '0.6fr' },
         { label: 'التاريخ', width: '0.8fr' },
@@ -1180,89 +1447,87 @@ async function openSupplierPurchases(id, name, acc, page = 1) {
         { label: 'المدفوع', width: '0.7fr' },
         { label: 'المتبقي', width: '0.7fr' }
       ],
-      data.rows.map((row) => ({
+      (data.invoices?.rows || []).map((row) => ({
         clickable: true,
         attrs: `data-id="${row.id}"`,
-        cells: [row.no, dateText(row.date), whoText(row.byName), money(row.amount), money(row.paid), money(row.due)]
+        cells: [row.no, dateText(row.date), whoText(row.byName), money(row.amount), money(row.paid), money(row.due)],
+        classes: ['', '', '', '', '', Number(row.due) > 0 ? 'due' : 'ok']
       }))
     );
-    drawer.innerHTML = `<article class="sheet">
+    const statement = data.statement || { reason: 'no-account', rows: [], balance: null };
+    let statementBody = '<div class="empty">لا يوجد كود حساب</div>';
+    if (statement.reason === 'empty') {
+      statementBody = `<p class="meta"><span>الرصيد ${money(0)}</span></p><div class="empty">لا توجد حركات على الحساب</div>`;
+    } else if (statement.reason !== 'no-account') {
+      const rows = grid(
+        [
+          { label: 'التاريخ', width: '0.8fr' },
+          { label: 'البيان', width: '1.6fr' },
+          { label: 'مدين', width: '0.7fr' },
+          { label: 'دائن', width: '0.7fr' },
+          { label: 'الرصيد', width: '0.8fr' }
+        ],
+        (statement.rows || []).map((row) => ({
+          cells: [dateText(row.date), esc(row.text || '—'), money(row.debit), money(row.credit), money(row.balance)]
+        }))
+      );
+      statementBody = `<p class="meta"><span>رصيد الحساب ${money(statement.balance)}</span><span>${num(statement.total)} حركة</span></p>${statement.rows?.length ? rows : '<div class="empty">لا توجد حركات في هذه الصفحة</div>'}`;
+    }
+    drawer.innerHTML = `<article class="sheet popup">
       <header>
-        <div><h2>فواتير الشراء</h2><p>${esc(supplier.name)}${supplier.accCode ? ` · ${esc(supplier.accCode)}` : ''}</p></div>
-        <button id="closeDrawer" class="ghost" type="button">إغلاق</button>
+        <div><h2>${title}</h2><p>${esc(party.name || '')}</p></div>
+        <div class="profile-actions">
+          <button id="printProfile" class="ghost" type="button">طباعة</button>
+          <button id="closeDrawer" class="ghost" type="button">إغلاق</button>
+        </div>
       </header>
-      <p class="meta"><span>${num(data.total)} فاتورة</span></p>
-      ${data.rows.length ? rows : '<div class="empty">لا توجد فواتير شراء لهذا المورد</div>'}
-      <div class="pager">
-        <button type="button" id="histPrev" ${page <= 1 ? 'disabled' : ''}>السابق</button>
-        <button type="button" id="histNext" ${page >= pages ? 'disabled' : ''}>التالي</button>
+      ${facts ? `<p class="meta profile-facts">${facts}</p>` : ''}
+      <div class="money">
+        <div><span>عدد الفواتير</span><strong>${num(data.summary?.count || 0)}</strong></div>
+        <div><span>الإجمالي</span><strong>${money(data.summary?.total)}</strong></div>
+        <div><span>المدفوع</span><strong>${money(data.summary?.paid)}</strong></div>
+        <div><span>المتبقي</span><strong>${money(data.summary?.due)}</strong></div>
       </div>
+      <section class="profile-block">
+        <h3>الفواتير</h3>
+        ${data.invoices?.rows?.length ? invoiceRows : `<div class="empty">${emptyInvoices}</div>`}
+        ${profilePager('inv', invoicePage, invoicePages)}
+      </section>
+      <section class="profile-block">
+        <h3>كشف الحساب</h3>
+        ${statementBody}
+        ${statement.reason === 'no-account' ? '' : profilePager('stm', statementPage, statementPages)}
+      </section>
     </article>`;
     document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
-    document.getElementById('histPrev').onclick = () => { if (page > 1) openSupplierPurchases(id, supplier.name, supplier.accCode, page - 1); };
-    document.getElementById('histNext').onclick = () => { if (page < pages) openSupplierPurchases(id, supplier.name, supplier.accCode, page + 1); };
+    document.getElementById('printProfile').onclick = async () => {
+      const button = document.getElementById('printProfile');
+      button.disabled = true;
+      try {
+        const full = await api(`/api/${path}/${id}/profile?print=1`);
+        printDocument(profilePrintHtml(kind, full), `${title} ${full.party?.name || ''}`);
+      } catch (error) {
+        button.disabled = false;
+        return;
+      }
+      button.disabled = false;
+    };
+    document.getElementById('invPrev').onclick = () => { if (invoicePage > 1) openPartyProfile(kind, id, invoicePage - 1, statementPage); };
+    document.getElementById('invNext').onclick = () => { if (invoicePage < invoicePages) openPartyProfile(kind, id, invoicePage + 1, statementPage); };
+    const statementPrev = document.getElementById('stmPrev');
+    const statementNext = document.getElementById('stmNext');
+    if (statementPrev) statementPrev.onclick = () => { if (statementPage > 1) openPartyProfile(kind, id, invoicePage, statementPage - 1); };
+    if (statementNext) statementNext.onclick = () => { if (statementPage < statementPages) openPartyProfile(kind, id, invoicePage, statementPage + 1); };
     drawer.onclick = (event) => { if (event.target === drawer) drawer.classList.add('hidden'); };
-    drawer.querySelectorAll('.data-row.clickable').forEach((row) => {
+    drawer.querySelectorAll('.profile-block .data-row.clickable').forEach((row) => {
       row.onclick = async () => {
-        await openInvoice('purchases', row.dataset.id);
+        await openInvoice(invoiceKind, row.dataset.id);
         const close = document.getElementById('closeDrawer');
-        if (close) close.onclick = () => openSupplierPurchases(id, supplier.name, supplier.accCode, page);
+        if (close) close.onclick = () => openPartyProfile(kind, id, invoicePage, statementPage);
       };
     });
   } catch (error) {
-    drawer.innerHTML = `<article class="sheet"><header><h2>فواتير الشراء</h2><button id="closeDrawer" class="ghost" type="button">إغلاق</button></header><div class="error">${esc(error.message)}</div></article>`;
-    document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
-  }
-}
-
-async function openClientSales(id, name, acc, page = 1) {
-  drawer.classList.remove('hidden');
-  drawer.innerHTML = `<article class="sheet"><header><div><h2>فواتير البيع</h2><p>${esc(name)}</p></div><button id="closeDrawer" class="ghost" type="button">إغلاق</button></header><div class="skeleton"><span></span><span></span><span></span></div></article>`;
-  document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
-  try {
-    const data = await api(`/api/clients/${id}/sales?page=${page}&pageSize=20`);
-    const client = data.client || { name, accCode: acc };
-    const pages = Math.max(1, Math.ceil(data.total / 20));
-    const rows = grid(
-      [
-        { label: 'الرقم', width: '0.6fr' },
-        { label: 'التاريخ', width: '0.8fr' },
-        { label: 'المستخدم', width: '0.9fr' },
-        { label: 'الإجمالي', width: '0.8fr' },
-        { label: 'المدفوع', width: '0.7fr' },
-        { label: 'المتبقي', width: '0.7fr' }
-      ],
-      data.rows.map((row) => ({
-        clickable: true,
-        attrs: `data-id="${row.id}"`,
-        cells: [row.no, dateText(row.date), whoText(row.byName), money(row.amount), money(row.paid), money(row.due)]
-      }))
-    );
-    drawer.innerHTML = `<article class="sheet">
-      <header>
-        <div><h2>فواتير البيع</h2><p>${esc(client.name)}${client.accCode ? ` · ${esc(client.accCode)}` : ''}</p></div>
-        <button id="closeDrawer" class="ghost" type="button">إغلاق</button>
-      </header>
-      <p class="meta"><span>${num(data.total)} فاتورة</span></p>
-      ${data.rows.length ? rows : '<div class="empty">لا توجد فواتير بيع لهذا العميل</div>'}
-      <div class="pager">
-        <button type="button" id="histPrev" ${page <= 1 ? 'disabled' : ''}>السابق</button>
-        <button type="button" id="histNext" ${page >= pages ? 'disabled' : ''}>التالي</button>
-      </div>
-    </article>`;
-    document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
-    document.getElementById('histPrev').onclick = () => { if (page > 1) openClientSales(id, client.name, client.accCode, page - 1); };
-    document.getElementById('histNext').onclick = () => { if (page < pages) openClientSales(id, client.name, client.accCode, page + 1); };
-    drawer.onclick = (event) => { if (event.target === drawer) drawer.classList.add('hidden'); };
-    drawer.querySelectorAll('.data-row.clickable').forEach((row) => {
-      row.onclick = async () => {
-        await openInvoice('sales', row.dataset.id);
-        const close = document.getElementById('closeDrawer');
-        if (close) close.onclick = () => openClientSales(id, client.name, client.accCode, page);
-      };
-    });
-  } catch (error) {
-    drawer.innerHTML = `<article class="sheet"><header><h2>فواتير البيع</h2><button id="closeDrawer" class="ghost" type="button">إغلاق</button></header><div class="error">${esc(error.message)}</div></article>`;
+    drawer.innerHTML = `<article class="sheet popup"><header><div><h2>${title}</h2></div><button id="closeDrawer" class="ghost" type="button">إغلاق</button></header><div class="error">${esc(error.message)}</div></article>`;
     document.getElementById('closeDrawer').onclick = () => drawer.classList.add('hidden');
   }
 }
@@ -1358,7 +1623,7 @@ function renderTransfer() {
       <div class="toolbar">
         <input id="productQ" placeholder="رقم أو كود أو اسم المنتج">
         <input id="lineQty" type="number" min="0.01" step="0.01" value="1" placeholder="الكمية">
-        <button id="findProduct" type="button" class="ghost">بحث منتج</button>
+        <button id="findProduct" type="button">بحث منتج</button>
       </div>
       <div id="productResults"></div>
       <div class="data" style="--cols:1.6fr .8fr .7fr .5fr">
@@ -1610,7 +1875,7 @@ function renderNewSale() {
         <input id="clientQ" placeholder="ابحث عن عميل للبيع الآجل">
         <select id="saleStore">${storeOptions(draft.storeId)}</select>
         ${paidFields(draft.paid, draft.partial, 'تحصيل نقدي')}
-        <button id="findClient" type="button" class="ghost">بحث عميل</button>
+        <button id="findClient" type="button">بحث عميل</button>
         <button id="newClient" type="button" class="ghost">عميل جديد</button>
       </div>
       <div id="clientPick" class="meta">العميل: ${esc(draft.clientName || 'عميل نقدي')}</div>
@@ -1624,7 +1889,7 @@ function renderNewSale() {
         <input id="productQ" placeholder="رقم أو كود أو اسم المنتج">
         <input id="lineQty" type="number" min="0.01" step="0.01" value="1" placeholder="الكمية">
         <input id="linePrice" type="number" min="0" step="0.01" placeholder="السعر">
-        <button id="findProduct" type="button" class="ghost">بحث منتج</button>
+        <button id="findProduct" type="button">بحث منتج</button>
       </div>
       <div id="productResults"></div>
       ${inlineProductHtml('saleNew')}
@@ -1780,7 +2045,7 @@ function renderNewPurchase() {
         <input id="supplierQ" placeholder="ابحث عن مورد للشراء الآجل">
         <select id="purchaseStore">${storeOptions(purchaseDraft.storeId)}</select>
         ${paidFields(purchaseDraft.paid, purchaseDraft.partial, 'سداد نقدي')}
-        <button id="findSupplier" type="button" class="ghost">بحث مورد</button>
+        <button id="findSupplier" type="button">بحث مورد</button>
         <button id="newSupplier" type="button" class="ghost">مورد جديد</button>
       </div>
       <div id="supplierPick" class="meta">المورد: ${esc(purchaseDraft.supplierName || 'مشتريات نقدية')}</div>
@@ -1794,7 +2059,7 @@ function renderNewPurchase() {
         <input id="productQ" placeholder="رقم أو كود أو اسم المنتج">
         <input id="lineQty" type="number" min="0.01" step="0.01" value="1" placeholder="الكمية">
         <input id="linePrice" type="number" min="0" step="0.01" placeholder="سعر الشراء">
-        <button id="findProduct" type="button" class="ghost">بحث منتج</button>
+        <button id="findProduct" type="button">بحث منتج</button>
       </div>
       <div id="productResults"></div>
       ${inlineProductHtml('buyNew')}
@@ -2085,7 +2350,7 @@ async function openInvoice(kind, id) {
     <div class="sheet-actions">
       ${data.lines.some((line) => Number(line.qty) - Number(line.returned) > 0) ? '<button id="returnBtn" class="history-btn primary" type="button">مرتجع من الفاتورة</button>' : ''}
       <button id="printInvoice" class="ghost" type="button">طباعة الفاتورة</button>
-      <button id="editInvoice" class="ghost" type="button">تعديل الفاتورة</button>
+      <button id="editInvoice" type="button">تعديل الفاتورة</button>
     </div>
     <div class="money">
       ${Number(invoice.discount) > 0 ? `<div><span>قبل الخصم</span><strong>${money(invoice.products)}</strong></div><div><span>الخصم</span><strong>${money(invoice.discount)}</strong></div>` : ''}
