@@ -4347,6 +4347,24 @@ async function stockAfter(tx, snap) {
     if (!delta) continue;
     const [productId, storeId] = key.split(':').map(Number);
     await ensureStore(tx, productId, storeId);
+    if (delta < 0) {
+      const current = (await txQuery(tx, `
+        SELECT ISNULL(ps.ProductStock, 0) AS qty, ISNULL(p.ProductName, N'') AS name, ISNULL(s.StoreName, N'') AS storeName
+        FROM tblProductsStores ps WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN tblProducts p ON p.ProductId = ps.ProductID
+        LEFT JOIN tblStores s ON s.StoreID = ps.StoreID
+        WHERE ps.ProductID = @pid AND ps.StoreID = @store AND ps.CompCode = 0
+      `, [
+        { name: 'pid', type: sql.Numeric(18, 0), value: productId },
+        { name: 'store', type: sql.Numeric(18, 0), value: storeId }
+      ])).recordset[0] || { qty: 0, name: '', storeName: '' };
+      const available = Number(current.qty) || 0;
+      if (available + delta < -0.00001) {
+        const label = current.name || `صنف ${productId}`;
+        const where = current.storeName || `مخزن ${storeId}`;
+        throw new Error(`الرصيد لا يكفي: ${label} في ${where} — المتاح ${roundTo(Math.max(available, 0), 2)} والمطلوب ${roundTo(-delta, 2)}`);
+      }
+    }
     await txQuery(tx, `
       UPDATE tblProductsStores SET ProductStock = ISNULL(ProductStock, 0) + @delta
       WHERE ProductID = @pid AND StoreID = @store AND CompCode = 0;
