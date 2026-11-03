@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="icon" type="image/png" href="/logo.png?v=20261009a">
-  <link rel="stylesheet" href="/styles.css?v=20261015b">
+  <link rel="stylesheet" href="/styles.css?v=20261021a">
 </head>
 <body>
   <section id="loginView" class="login-wrap">
@@ -47,25 +47,27 @@
       <header class="top">
         <button id="menuBtn" class="ghost menu-btn" type="button" aria-label="القائمة"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
         <div>
-          <h2 id="title">لوحة التحكم</h2>
+          <h2 id="title">الرمزي إخوان</h2>
           <p id="subtitle"></p>
         </div>
         <span id="who"></span>
       </header>
+      <div id="tabStrip" class="tab-strip"></div>
+      <div id="actionBar" class="action-bar hidden"></div>
       <main id="content"></main>
     </div>
   </div>
   <nav class="dock" id="bottomNav">
     <button type="button" data-id="dashboard">لوحة</button>
     <button type="button" data-id="stock">مخزون</button>
-    <button type="button" data-id="products">منتجات</button>
-    <button type="button" data-id="newSale">بيع</button>
-    <button type="button" data-id="sales">فواتير</button>
+    <button type="button" data-id="products">أصناف</button>
+    <button type="button" data-id="sales">مبيعات</button>
+    <button type="button" data-id="purchases">مشتريات</button>
     <button type="button" id="moreBtn">المزيد</button>
   </nav>
   <div id="scrim" class="scrim hidden"></div>
   <div id="drawer" class="drawer hidden"></div>
   <div id="printRoot"></div>
-  <script src="/app.js?v=20261015b"></script>
+  <script src="/app.js?v=20261021a"></script>
 </body>
 </html>

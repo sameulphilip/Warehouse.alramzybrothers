@@ -1240,13 +1240,19 @@ app.get('/api/stores', requireAuth, async (req, res) => {
   try {
     const pool = await poolPromise;
     const result = await pool.request().query(`
-      SELECT StoreID, ISNULL(StoreName, N'') AS StoreName,
-             ISNULL(Address, N'') AS Address,
-             ISNULL(PhoneNo, N'') AS PhoneNo,
-             ISNULL(MobilNo, N'') AS MobilNo
-      FROM tblStores
-      WHERE StoreName IS NOT NULL AND LTRIM(RTRIM(StoreName)) <> N''
-      ORDER BY StoreName
+      SELECT s.StoreID, ISNULL(s.StoreName, N'') AS StoreName,
+             ISNULL(s.Address, N'') AS Address,
+             ISNULL(s.Contact, N'') AS Contact,
+             ISNULL(s.PhoneNo, N'') AS PhoneNo,
+             ISNULL(s.MobilNo, N'') AS MobilNo,
+             ISNULL(s.StoreAccCode, N'') AS StoreAccCode,
+             bs.BranchID AS BranchID,
+             ISNULL(b.BranchName, N'') AS BranchName
+      FROM tblStores s
+      LEFT JOIN tblBranchStore bs ON bs.StoreID = s.StoreID
+      LEFT JOIN tblBranch b ON b.BranchID = bs.BranchID
+      WHERE s.StoreName IS NOT NULL AND LTRIM(RTRIM(s.StoreName)) <> N''
+      ORDER BY s.StoreName
     `);
     const seen = new Set();
     const stores = [];
@@ -1258,14 +1264,468 @@ app.get('/api/stores', requireAuth, async (req, res) => {
         id: row.StoreID,
         name,
         address: row.Address,
+        contact: row.Contact,
         phone: row.PhoneNo,
-        mobile: row.MobilNo
+        mobile: row.MobilNo,
+        accCode: row.StoreAccCode,
+        branchId: row.BranchID == null ? null : Number(row.BranchID),
+        branchName: row.BranchName || ''
       });
     }
     res.json({ stores });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'تعذر تحميل المخازن' });
+  }
+});
+
+function storeInput(body) {
+  const name = String((body && body.name) || '').trim();
+  const address = String((body && body.address) || '').trim();
+  const phone = String((body && (body.phone || body.mobile)) || '').trim();
+  const contact = String((body && body.contact) || '').trim();
+  if (!name) return { error: 'اسم المخزن مطلوب' };
+  if (name.length > 50) return { error: 'اسم المخزن أطول من 50 حرفاً' };
+  if (address.length > 100) return { error: 'العنوان أطول من 100 حرف' };
+  if (phone.length > 20) return { error: 'رقم الهاتف أطول من 20 رقماً' };
+  if (contact.length > 50) return { error: 'اسم المسؤول أطول من 50 حرفاً' };
+  return { name, address, phone, contact };
+}
+
+async function tryDeleteUnusedAccount(tx, code) {
+  const acc = String(code || '').trim();
+  if (!acc) return;
+  const used = await txQuery(tx, `
+    SELECT TOP 1 Ser FROM tblJournalEntryDetails WHERE AccCode = @code
+  `, [{ name: 'code', type: sql.NVarChar(50), value: acc }]);
+  if (used.recordset[0]) return;
+  await txQuery(tx, `
+    DELETE FROM tblAccTree
+    WHERE AccCode = @code AND ISNULL(HaveSub, 0) = 0
+  `, [{ name: 'code', type: sql.NVarChar(50), value: acc }]);
+}
+
+async function renameAccount(tx, code, name) {
+  const acc = String(code || '').trim();
+  if (!acc) return;
+  await txQuery(tx, `
+    UPDATE tblAccTree SET AccName = @name, AccDis = @name WHERE AccCode = @code
+  `, [
+    { name: 'code', type: sql.NVarChar(50), value: acc },
+    { name: 'name', type: sql.NVarChar(100), value: name }
+  ]);
+}
+
+async function assignStoreBranch(tx, storeId, branchId) {
+  const branch = await txQuery(tx, `
+    SELECT BranchID FROM tblBranch WITH (UPDLOCK, HOLDLOCK) WHERE BranchID = @id
+  `, [{ name: 'id', type: sql.Int, value: branchId }]);
+  if (!branch.recordset[0]) throw new Error('الفرع غير موجود');
+  const link = await txQuery(tx, `
+    SELECT BranchStoreID FROM tblBranchStore WITH (UPDLOCK, HOLDLOCK) WHERE StoreID = @store
+  `, [{ name: 'store', type: sql.Numeric(18, 0), value: storeId }]);
+  if (link.recordset[0]) {
+    await txQuery(tx, `
+      UPDATE tblBranchStore SET BranchID = @branch WHERE StoreID = @store
+    `, [
+      { name: 'branch', type: sql.Int, value: branchId },
+      { name: 'store', type: sql.Numeric(18, 0), value: storeId }
+    ]);
+  } else {
+    await txQuery(tx, `
+      INSERT INTO tblBranchStore (BranchID, StoreID) VALUES (@branch, @store)
+    `, [
+      { name: 'branch', type: sql.Int, value: branchId },
+      { name: 'store', type: sql.Numeric(18, 0), value: storeId }
+    ]);
+  }
+}
+
+app.get('/api/stores/:id', requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id < 0) return res.status(400).json({ error: 'المخزن غير موجود' });
+    const rows = await runQuery(`
+      SELECT s.StoreID AS id, ISNULL(s.StoreName, N'') AS name,
+             ISNULL(s.Address, N'') AS address, ISNULL(s.Contact, N'') AS contact,
+             ISNULL(s.PhoneNo, N'') AS phone, ISNULL(s.MobilNo, N'') AS mobile,
+             ISNULL(s.StoreAccCode, N'') AS accCode,
+             bs.BranchID AS branchId,
+             ISNULL(b.BranchName, N'') AS branchName
+      FROM tblStores s
+      LEFT JOIN tblBranchStore bs ON bs.StoreID = s.StoreID
+      LEFT JOIN tblBranch b ON b.BranchID = bs.BranchID
+      WHERE s.StoreID = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
+    if (!rows[0]) return res.status(404).json({ error: 'المخزن غير موجود' });
+    const store = rows[0];
+    store.branchId = store.branchId == null ? null : Number(store.branchId);
+    res.json({ store });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'تعذر تحميل المخزن' });
+  }
+});
+
+app.post('/api/stores', requireAuth, async (req, res) => {
+  const item = storeInput(req.body);
+  if (item.error) return res.status(400).json({ error: item.error });
+  let branchId = Number(req.body && req.body.branchId);
+  if (!Number.isFinite(branchId) || branchId < 0) branchId = 0;
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const taken = await txQuery(tx, `
+      SELECT TOP 1 StoreID FROM tblStores WITH (UPDLOCK, HOLDLOCK)
+      WHERE LTRIM(RTRIM(StoreName)) = @name
+    `, [{ name: 'name', type: sql.NVarChar(50), value: item.name }]);
+    if (taken.recordset[0]) throw new Error('اسم المخزن مستخدم');
+    const id = await nextNumber(tx, 'tblStores', 'StoreID');
+    const code = await createPartyAccount(tx, '121', id, item.name);
+    await txQuery(tx, `
+      INSERT INTO tblStores
+        (StoreID, StoreName, Address, Contact, PhoneNo, FaxNo, MobilNo, StoreType, StoreAccCode, CompCode)
+      VALUES
+        (@id, @name, @address, @contact, @phone, N'', @phone, 0, @code, 0)
+    `, [
+      { name: 'id', type: sql.Numeric(18, 0), value: id },
+      { name: 'name', type: sql.NVarChar(50), value: item.name },
+      { name: 'address', type: sql.NVarChar(100), value: item.address },
+      { name: 'contact', type: sql.NVarChar(50), value: item.contact },
+      { name: 'phone', type: sql.NVarChar(20), value: item.phone },
+      { name: 'code', type: sql.NVarChar(200), value: code }
+    ]);
+    await assignStoreBranch(tx, id, branchId);
+    await tx.commit();
+    recordActivity(req, { action: 'store', detail: `مخزن جديد ${item.name}`, ref: `store:${id}` });
+    res.json({ id, name: item.name, address: item.address, phone: item.phone, mobile: item.phone, contact: item.contact, accCode: code, branchId });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حفظ المخزن' });
+  }
+});
+
+app.put('/api/stores/:id', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id < 0) return res.status(400).json({ error: 'المخزن غير موجود' });
+  const item = storeInput(req.body);
+  if (item.error) return res.status(400).json({ error: item.error });
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const existing = await txQuery(tx, `
+      SELECT StoreID, ISNULL(StoreAccCode, N'') AS accCode
+      FROM tblStores WITH (UPDLOCK, HOLDLOCK) WHERE StoreID = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
+    if (!existing.recordset[0]) throw new Error('المخزن غير موجود');
+    const taken = await txQuery(tx, `
+      SELECT TOP 1 StoreID FROM tblStores
+      WHERE LTRIM(RTRIM(StoreName)) = @name AND StoreID <> @id
+    `, [
+      { name: 'name', type: sql.NVarChar(50), value: item.name },
+      { name: 'id', type: sql.Numeric(18, 0), value: id }
+    ]);
+    if (taken.recordset[0]) throw new Error('اسم المخزن مستخدم');
+    await txQuery(tx, `
+      UPDATE tblStores
+      SET StoreName = @name, Address = @address, Contact = @contact,
+          PhoneNo = @phone, MobilNo = @phone
+      WHERE StoreID = @id
+    `, [
+      { name: 'id', type: sql.Numeric(18, 0), value: id },
+      { name: 'name', type: sql.NVarChar(50), value: item.name },
+      { name: 'address', type: sql.NVarChar(100), value: item.address },
+      { name: 'contact', type: sql.NVarChar(50), value: item.contact },
+      { name: 'phone', type: sql.NVarChar(20), value: item.phone }
+    ]);
+    await renameAccount(tx, existing.recordset[0].accCode, item.name);
+    await tx.commit();
+    recordActivity(req, { action: 'store', detail: `تعديل مخزن ${item.name}`, ref: `store:${id}` });
+    res.json({ ok: true, id, name: item.name, address: item.address, phone: item.phone, contact: item.contact });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حفظ المخزن' });
+  }
+});
+
+app.delete('/api/stores/:id', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id < 0) return res.status(400).json({ error: 'المخزن غير موجود' });
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const existing = await txQuery(tx, `
+      SELECT StoreID, ISNULL(StoreName, N'') AS name, ISNULL(StoreAccCode, N'') AS accCode
+      FROM tblStores WITH (UPDLOCK, HOLDLOCK) WHERE StoreID = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
+    if (!existing.recordset[0]) throw new Error('المخزن غير موجود');
+    const blockers = await txQuery(tx, `
+      SELECT TOP 1 reason FROM (
+        SELECT N'رصيد أصناف' AS reason FROM tblProductsStores WHERE StoreID = @id AND ISNULL(ProductStock, 0) <> 0
+        UNION ALL SELECT N'فواتير بيع' FROM tblSellingInvoicesDetails WHERE StoreID = @id
+        UNION ALL SELECT N'فواتير شراء' FROM tblPurchaseInvoicesDetails WHERE StoreID = @id
+        UNION ALL SELECT N'حركات مخزون' FROM tblInventory WHERE StoreID = @id
+      ) x
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
+    if (blockers.recordset[0]) throw new Error(`لا يمكن حذف المخزن لوجود ${blockers.recordset[0].reason}`);
+    await txQuery(tx, `DELETE FROM tblBranchStore WHERE StoreID = @id`, [
+      { name: 'id', type: sql.Numeric(18, 0), value: id }
+    ]);
+    await txQuery(tx, `DELETE FROM tblProductsStores WHERE StoreID = @id`, [
+      { name: 'id', type: sql.Numeric(18, 0), value: id }
+    ]);
+    await txQuery(tx, `DELETE FROM tblStores WHERE StoreID = @id`, [
+      { name: 'id', type: sql.Numeric(18, 0), value: id }
+    ]);
+    await tryDeleteUnusedAccount(tx, existing.recordset[0].accCode);
+    await tx.commit();
+    recordActivity(req, { action: 'store', detail: `حذف مخزن ${existing.recordset[0].name}`, ref: `store:${id}` });
+    res.json({ ok: true });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حذف المخزن' });
+  }
+});
+
+function branchInput(body) {
+  const name = String((body && body.name) || '').trim();
+  const address = String((body && body.address) || '').trim();
+  const phone = String((body && (body.phone || body.mobile)) || '').trim();
+  const contact = String((body && body.contact) || '').trim();
+  if (!name) return { error: 'اسم الفرع مطلوب' };
+  if (name.length > 50) return { error: 'اسم الفرع أطول من 50 حرفاً' };
+  if (address.length > 100) return { error: 'العنوان أطول من 100 حرف' };
+  if (phone.length > 20) return { error: 'رقم الهاتف أطول من 20 رقماً' };
+  if (contact.length > 50) return { error: 'اسم المسؤول أطول من 50 حرفاً' };
+  return { name, address, phone, contact };
+}
+
+app.get('/api/branches', requireAuth, async (req, res) => {
+  try {
+    const rows = await runQuery(`
+      SELECT
+        b.BranchID AS id,
+        ISNULL(b.BranchName, N'') AS name,
+        ISNULL(b.Address, N'') AS address,
+        ISNULL(b.Contact, N'') AS contact,
+        ISNULL(b.PhoneNo, N'') AS phone,
+        ISNULL(b.MobileNo, N'') AS mobile,
+        ISNULL(b.SalesAccCode, N'') AS salesAccCode,
+        (
+          SELECT COUNT(*) FROM tblBranchStore bs WHERE bs.BranchID = b.BranchID
+        ) AS storeCount
+      FROM tblBranch b
+      ORDER BY b.BranchID
+    `);
+    res.json({
+      branches: rows.map((row) => ({
+        ...row,
+        id: Number(row.id),
+        storeCount: Number(row.storeCount) || 0
+      }))
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'تعذر تحميل الفروع' });
+  }
+});
+
+app.get('/api/branches/:id', requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id < 0) return res.status(400).json({ error: 'الفرع غير موجود' });
+    const rows = await runQuery(`
+      SELECT
+        BranchID AS id,
+        ISNULL(BranchName, N'') AS name,
+        ISNULL(Address, N'') AS address,
+        ISNULL(Contact, N'') AS contact,
+        ISNULL(PhoneNo, N'') AS phone,
+        ISNULL(MobileNo, N'') AS mobile,
+        ISNULL(SalesAccCode, N'') AS salesAccCode
+      FROM tblBranch WHERE BranchID = @id
+    `, [{ name: 'id', type: sql.Int, value: id }]);
+    if (!rows[0]) return res.status(404).json({ error: 'الفرع غير موجود' });
+    const stores = await runQuery(`
+      SELECT s.StoreID AS id, ISNULL(s.StoreName, N'') AS name,
+             ISNULL(s.Address, N'') AS address, ISNULL(s.MobilNo, N'') AS mobile
+      FROM tblBranchStore bs
+      INNER JOIN tblStores s ON s.StoreID = bs.StoreID
+      WHERE bs.BranchID = @id
+      ORDER BY s.StoreName
+    `, [{ name: 'id', type: sql.Int, value: id }]);
+    res.json({
+      branch: { ...rows[0], id: Number(rows[0].id) },
+      stores: stores.map((store) => ({ ...store, id: Number(store.id) }))
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'تعذر تحميل الفرع' });
+  }
+});
+
+app.post('/api/branches', requireAuth, async (req, res) => {
+  const item = branchInput(req.body);
+  if (item.error) return res.status(400).json({ error: item.error });
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const taken = await txQuery(tx, `
+      SELECT TOP 1 BranchID FROM tblBranch WITH (UPDLOCK, HOLDLOCK)
+      WHERE LTRIM(RTRIM(BranchName)) = @name
+    `, [{ name: 'name', type: sql.NVarChar(50), value: item.name }]);
+    if (taken.recordset[0]) throw new Error('اسم الفرع مستخدم');
+    const id = await nextNumber(tx, 'tblBranch', 'BranchID');
+    const main = await txQuery(tx, `
+      SELECT TOP 1 ISNULL(SalesAccCode, N'') AS salesAccCode FROM tblBranch WHERE BranchID = 0
+    `);
+    const salesAcc = (main.recordset[0] && main.recordset[0].salesAccCode) || '';
+    await txQuery(tx, `
+      INSERT INTO tblBranch
+        (BranchID, BranchName, BranchExpensesAccCode, SalesAccCode, CashClientId, PriceListId,
+         Address, Contact, PhoneNo, FaxNo, MobileNo, IsServiceCenter)
+      VALUES
+        (@id, @name, NULL, @sales, 0, 0, @address, @contact, @phone, N'', @phone, 0)
+    `, [
+      { name: 'id', type: sql.Int, value: id },
+      { name: 'name', type: sql.NVarChar(50), value: item.name },
+      { name: 'sales', type: sql.NVarChar(200), value: salesAcc || null },
+      { name: 'address', type: sql.NVarChar(100), value: item.address },
+      { name: 'contact', type: sql.NVarChar(50), value: item.contact },
+      { name: 'phone', type: sql.NVarChar(20), value: item.phone }
+    ]);
+    await tx.commit();
+    recordActivity(req, { action: 'branch', detail: `فرع جديد ${item.name}`, ref: `branch:${id}` });
+    res.json({ id, name: item.name, address: item.address, phone: item.phone, contact: item.contact });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حفظ الفرع' });
+  }
+});
+
+app.put('/api/branches/:id', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id < 0) return res.status(400).json({ error: 'الفرع غير موجود' });
+  const item = branchInput(req.body);
+  if (item.error) return res.status(400).json({ error: item.error });
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const existing = await txQuery(tx, `
+      SELECT BranchID FROM tblBranch WITH (UPDLOCK, HOLDLOCK) WHERE BranchID = @id
+    `, [{ name: 'id', type: sql.Int, value: id }]);
+    if (!existing.recordset[0]) throw new Error('الفرع غير موجود');
+    const taken = await txQuery(tx, `
+      SELECT TOP 1 BranchID FROM tblBranch
+      WHERE LTRIM(RTRIM(BranchName)) = @name AND BranchID <> @id
+    `, [
+      { name: 'name', type: sql.NVarChar(50), value: item.name },
+      { name: 'id', type: sql.Int, value: id }
+    ]);
+    if (taken.recordset[0]) throw new Error('اسم الفرع مستخدم');
+    await txQuery(tx, `
+      UPDATE tblBranch
+      SET BranchName = @name, Address = @address, Contact = @contact,
+          PhoneNo = @phone, MobileNo = @phone
+      WHERE BranchID = @id
+    `, [
+      { name: 'id', type: sql.Int, value: id },
+      { name: 'name', type: sql.NVarChar(50), value: item.name },
+      { name: 'address', type: sql.NVarChar(100), value: item.address },
+      { name: 'contact', type: sql.NVarChar(50), value: item.contact },
+      { name: 'phone', type: sql.NVarChar(20), value: item.phone }
+    ]);
+    await tx.commit();
+    recordActivity(req, { action: 'branch', detail: `تعديل فرع ${item.name}`, ref: `branch:${id}` });
+    res.json({ ok: true, id, name: item.name });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حفظ الفرع' });
+  }
+});
+
+app.delete('/api/branches/:id', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id < 0) return res.status(400).json({ error: 'الفرع غير موجود' });
+  if (id === 0) return res.status(400).json({ error: 'لا يمكن حذف الفرع الرئيسي' });
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const existing = await txQuery(tx, `
+      SELECT BranchID, ISNULL(BranchName, N'') AS name
+      FROM tblBranch WITH (UPDLOCK, HOLDLOCK) WHERE BranchID = @id
+    `, [{ name: 'id', type: sql.Int, value: id }]);
+    if (!existing.recordset[0]) throw new Error('الفرع غير موجود');
+    const stores = await txQuery(tx, `
+      SELECT TOP 1 BranchStoreID FROM tblBranchStore WHERE BranchID = @id
+    `, [{ name: 'id', type: sql.Int, value: id }]);
+    if (stores.recordset[0]) throw new Error('انقل المخازن لفرع آخر قبل الحذف');
+    const blockers = await txQuery(tx, `
+      SELECT TOP 1 reason FROM (
+        SELECT N'فواتير بيع' AS reason FROM tblSellingInvoice WHERE BranchId = @id
+        UNION ALL SELECT N'فواتير شراء' FROM tblPurchaseInvoice WHERE BranchId = @id
+      ) x
+    `, [{ name: 'id', type: sql.Int, value: id }]);
+    if (blockers.recordset[0]) throw new Error(`لا يمكن حذف الفرع لوجود ${blockers.recordset[0].reason}`);
+    await txQuery(tx, `DELETE FROM tblBranch WHERE BranchID = @id`, [
+      { name: 'id', type: sql.Int, value: id }
+    ]);
+    await tx.commit();
+    recordActivity(req, { action: 'branch', detail: `حذف فرع ${existing.recordset[0].name}`, ref: `branch:${id}` });
+    res.json({ ok: true });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حذف الفرع' });
+  }
+});
+
+app.put('/api/stores/:id/branch', requireAuth, async (req, res) => {
+  const storeId = Number(req.params.id);
+  const branchId = Number(req.body && req.body.branchId);
+  if (!Number.isFinite(storeId) || storeId < 0) return res.status(400).json({ error: 'المخزن غير موجود' });
+  if (!Number.isFinite(branchId) || branchId < 0) return res.status(400).json({ error: 'اختر الفرع' });
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const store = await txQuery(tx, `
+      SELECT StoreID, ISNULL(StoreName, N'') AS name FROM tblStores WITH (UPDLOCK, HOLDLOCK) WHERE StoreID = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: storeId }]);
+    if (!store.recordset[0]) throw new Error('المخزن غير موجود');
+    await assignStoreBranch(tx, storeId, branchId);
+    const branch = await txQuery(tx, `
+      SELECT ISNULL(BranchName, N'') AS name FROM tblBranch WHERE BranchID = @id
+    `, [{ name: 'id', type: sql.Int, value: branchId }]);
+    await tx.commit();
+    recordActivity(req, {
+      action: 'branch',
+      detail: `نقل مخزن ${store.recordset[0].name} إلى ${branch.recordset[0]?.name || branchId}`,
+      ref: `store:${storeId}`
+    });
+    res.json({ ok: true, storeId, branchId, branchName: branch.recordset[0]?.name || '' });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر نقل المخزن' });
   }
 });
 
@@ -1334,7 +1794,7 @@ app.get('/api/products', requireAuth, async (req, res) => {
   try {
     const { page, pageSize, start, end } = paging(req);
     const q = String(req.query.q || '').trim().slice(0, 80);
-    if (q && page === 1) recordActivity(req, { action: 'search', detail: `بحث عن منتج: ${q}` });
+    if (q && page === 1) recordActivity(req, { action: 'search', detail: `بحث عن صنف: ${q}` });
     const filters = [
       { name: 'q', type: sql.NVarChar(80), value: q },
       { name: 'like', type: sql.NVarChar(90), value: likeOf(q) }
@@ -1378,7 +1838,21 @@ app.get('/api/products', requireAuth, async (req, res) => {
         SELECT
           n.id, n.code, n.name, n.unitName, n.stock, n.reorderLevel,
           ${saleSql} AS salePrice,
-          ${buySql} AS buyPrice
+          ${buySql} AS buyPrice,
+          (
+            SELECT TOP 1 CAST(ISNULL(NULLIF(d.SellingPricePerUnit, 0), ISNULL(d.LotPricePerUnit, 0)) AS float)
+            FROM tblSellingInvoicesDetails d
+            INNER JOIN tblSellingInvoice si ON si.SellingInvoiceID = d.SellingInvoiceID
+            WHERE d.ProductID = n.id
+            ORDER BY si.SellingInvoiceDate DESC, d.SellingInvoiceID DESC
+          ) AS lastSalePrice,
+          (
+            SELECT TOP 1 CAST(ISNULL(d.PurchasePrice, 0) AS float)
+            FROM tblPurchaseInvoicesDetails d
+            INNER JOIN tblPurchaseInvoice pi ON pi.PurchaseInvoiceID = d.PurchaseInvoiceID
+            WHERE d.ProductID = n.id
+            ORDER BY pi.PurchaseInvoiceDate DESC, d.PurchaseInvoiceID DESC
+          ) AS lastBuyPrice
         FROM (${productPage}) n
       `, filters.concat([
         { name: 'start', type: sql.Int, value: start },
@@ -1389,7 +1863,7 @@ app.get('/api/products', requireAuth, async (req, res) => {
     res.json({ page, pageSize, total, rows });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'تعذر تحميل المنتجات' });
+    res.status(500).json({ error: 'تعذر تحميل الأصناف' });
   }
 });
 
@@ -1422,13 +1896,13 @@ function paymentAmount(body, total) {
 function readProductBody(body) {
   const name = String(body.name || '').trim();
   const code = String(body.code || '').trim();
-  if (!name) return { error: 'اسم المنتج مطلوب' };
-  if (name.length > 100) return { error: 'اسم المنتج أطول من 100 حرف' };
-  if (code.length > 50) return { error: 'كود المنتج أطول من 50 حرف' };
+  if (!name) return { error: 'اسم الصنف مطلوب' };
+  if (name.length > 100) return { error: 'اسم الصنف أطول من 100 حرف' };
+  if (code.length > 50) return { error: 'كود الصنف أطول من 50 حرف' };
   const productType = Number(body.productType ?? 0);
   const phaseId = Number(body.phaseId ?? 5);
-  if (![0, 1, 2].includes(productType)) return { error: 'نوع المنتج غير معروف' };
-  if (![0, 1, 2, 3, 4, 5].includes(phaseId)) return { error: 'مرحلة المنتج غير معروفة' };
+  if (![0, 1, 2].includes(productType)) return { error: 'نوع الصنف غير معروف' };
+  if (![0, 1, 2, 3, 4, 5].includes(phaseId)) return { error: 'مرحلة الصنف غير معروفة' };
   const salePrice = roundTo(body.salePrice, 4);
   const buyPrice = roundTo(body.buyPrice ?? 0, 4);
   const salesTax = roundTo(body.salesTax ?? 0, 4);
@@ -1487,10 +1961,20 @@ function invalidateProducts() {
   }
 }
 
+app.get('/api/products/next-id', requireAuth, async (req, res) => {
+  try {
+    const rows = await runQuery(`SELECT ISNULL(MAX(ProductId), 0) + 1 AS id FROM tblProducts`);
+    res.json({ id: Number(rows[0] && rows[0].id) || 1 });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'تعذر اقتراح رقم الصنف' });
+  }
+});
+
 app.get('/api/products/:id', requireAuth, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    if (!id) return res.status(400).json({ error: 'المنتج غير موجود' });
+    if (!id) return res.status(400).json({ error: 'الصنف غير موجود' });
     const [clientCols, supplierCols] = await Promise.all([
       tableCols('tblClients_Products'),
       tableCols('tblSuppliers_Products')
@@ -1517,7 +2001,7 @@ app.get('/api/products/:id', requireAuth, async (req, res) => {
       FROM tblProducts p
       WHERE p.ProductId = @id
     `, [{ name: 'id', type: sql.Numeric(28, 0), value: id }]);
-    if (!rows[0]) return res.status(404).json({ error: 'المنتج غير موجود' });
+    if (!rows[0]) return res.status(404).json({ error: 'الصنف غير موجود' });
     const product = rows[0];
     await recordActivity(req, {
       action: 'price',
@@ -1528,14 +2012,14 @@ app.get('/api/products/:id', requireAuth, async (req, res) => {
     res.json({ product, inquiries });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'تعذر تحميل المنتج' });
+    res.status(500).json({ error: 'تعذر تحميل الصنف' });
   }
 });
 
 app.get('/api/products/:id/sales', requireAuth, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    if (!id) return res.status(400).json({ error: 'المنتج غير موجود' });
+    if (!id) return res.status(400).json({ error: 'الصنف غير موجود' });
     const { page, pageSize, start, end } = paging(req);
     const filters = [{ name: 'id', type: sql.Numeric(28, 0), value: id }];
     const where = `
@@ -1578,7 +2062,7 @@ app.get('/api/products/:id/sales', requireAuth, async (req, res) => {
 app.get('/api/products/:id/purchases', requireAuth, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    if (!id) return res.status(400).json({ error: 'المنتج غير موجود' });
+    if (!id) return res.status(400).json({ error: 'الصنف غير موجود' });
     const { page, pageSize, start, end } = paging(req);
     const filters = [{ name: 'id', type: sql.Numeric(28, 0), value: id }];
     const where = `
@@ -1621,7 +2105,7 @@ app.get('/api/products/:id/purchases', requireAuth, async (req, res) => {
 app.get('/api/products/:id/moves', requireAuth, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    if (!id) return res.status(400).json({ error: 'المنتج غير موجود' });
+    if (!id) return res.status(400).json({ error: 'الصنف غير موجود' });
     const { page, pageSize, start, end } = paging(req);
     const filters = [{ name: 'id', type: sql.Numeric(28, 0), value: id }];
     const where = `FROM tblInventory i WHERE i.ProductID = @id`;
@@ -1686,7 +2170,7 @@ app.get('/api/products/:id/moves', requireAuth, async (req, res) => {
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'تعذر تحميل حركات المنتج' });
+    res.status(500).json({ error: 'تعذر تحميل حركات الصنف' });
   }
 });
 
@@ -1704,7 +2188,7 @@ app.post('/api/products', requireAuth, async (req, res) => {
         `SELECT TOP 1 ProductId FROM tblProducts WITH (UPDLOCK, HOLDLOCK) WHERE LTRIM(RTRIM(ProductCode)) = @code`,
         [{ name: 'code', type: sql.NVarChar(50), value: item.code }]
       );
-      if (taken.recordset[0]) throw new Error('كود المنتج مستخدم');
+      if (taken.recordset[0]) throw new Error('كود الصنف مستخدم');
     }
     const id = await nextNumber(tx, 'tblProducts', 'ProductId');
     const code = item.code || String(id);
@@ -1731,19 +2215,19 @@ app.post('/api/products', requireAuth, async (req, res) => {
     await saveBasePrice(tx, 'tblSuppliers_Products', 'SupplierID', id, 0, 0, item.buyPrice, 1);
     await tx.commit();
     invalidateProducts();
-    recordActivity(req, { action: 'product', detail: `إضافة منتج ${code} — ${item.name} — بيع ${item.salePrice} / شراء ${item.buyPrice}`, ref: `product:${id}` });
+    recordActivity(req, { action: 'product', detail: `إضافة صنف ${code} — ${item.name} — بيع ${item.salePrice} / شراء ${item.buyPrice}`, ref: `product:${id}` });
     res.json({ ok: true, id, code });
   } catch (error) {
     await tx.rollback().catch(() => {});
     console.error(error);
-    const message = error.message === 'كود المنتج مستخدم' ? error.message : 'تعذر إضافة المنتج';
-    res.status(error.message === 'كود المنتج مستخدم' ? 400 : 500).json({ error: message });
+    const message = error.message === 'كود الصنف مستخدم' ? error.message : 'تعذر إضافة الصنف';
+    res.status(error.message === 'كود الصنف مستخدم' ? 400 : 500).json({ error: message });
   }
 });
 
 app.put('/api/products/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
-  if (!id) return res.status(400).json({ error: 'المنتج غير موجود' });
+  if (!id) return res.status(400).json({ error: 'الصنف غير موجود' });
   const parsed = readProductBody(req.body || {});
   if (parsed.error) return res.status(400).json({ error: parsed.error });
   const item = parsed.value;
@@ -1756,7 +2240,7 @@ app.put('/api/products/:id', requireAuth, async (req, res) => {
       `SELECT ProductId, ISNULL(UnitID, 0) AS unitId, ISNULL(CompCode, 0) AS compCode FROM tblProducts WITH (UPDLOCK, HOLDLOCK) WHERE ProductId = @id`,
       [{ name: 'id', type: sql.Numeric(28, 0), value: id }]
     );
-    if (!existing.recordset[0]) throw new Error('المنتج غير موجود');
+    if (!existing.recordset[0]) throw new Error('الصنف غير موجود');
     if (item.code) {
       const taken = await txQuery(
         tx,
@@ -1766,7 +2250,7 @@ app.put('/api/products/:id', requireAuth, async (req, res) => {
           { name: 'id', type: sql.Numeric(28, 0), value: id }
         ]
       );
-      if (taken.recordset[0]) throw new Error('كود المنتج مستخدم');
+      if (taken.recordset[0]) throw new Error('كود الصنف مستخدم');
     }
     const updated = await txQuery(tx, `
       UPDATE tblProducts SET
@@ -1784,20 +2268,66 @@ app.put('/api/products/:id', requireAuth, async (req, res) => {
         RequireExpiryDate = @requireExpiry
       WHERE ProductId = @id
     `, productInputs(item, id));
-    if (!updated.rowsAffected[0]) throw new Error('المنتج غير موجود');
+    if (!updated.rowsAffected[0]) throw new Error('الصنف غير موجود');
     const unitId = Number(existing.recordset[0].unitId);
     const compCode = Number(existing.recordset[0].compCode);
     await saveBasePrice(tx, 'tblClients_Products', 'ClientID', id, unitId, compCode, item.salePrice, 2);
     await saveBasePrice(tx, 'tblSuppliers_Products', 'SupplierID', id, unitId, compCode, item.buyPrice, 1);
     await tx.commit();
     invalidateProducts();
-    recordActivity(req, { action: 'product', detail: `تعديل منتج ${item.code || id} — ${item.name} — بيع ${item.salePrice} / شراء ${item.buyPrice}`, ref: `product:${id}` });
+    recordActivity(req, { action: 'product', detail: `تعديل صنف ${item.code || id} — ${item.name} — بيع ${item.salePrice} / شراء ${item.buyPrice}`, ref: `product:${id}` });
     res.json({ ok: true, id });
   } catch (error) {
     await tx.rollback().catch(() => {});
     console.error(error);
-    const known = error.message === 'كود المنتج مستخدم' || error.message === 'المنتج غير موجود';
-    res.status(known ? 400 : 500).json({ error: known ? error.message : 'تعذر حفظ المنتج' });
+    const known = error.message === 'كود الصنف مستخدم' || error.message === 'الصنف غير موجود';
+    res.status(known ? 400 : 500).json({ error: known ? error.message : 'تعذر حفظ الصنف' });
+  }
+});
+
+app.delete('/api/products/:id', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!id) return res.status(400).json({ error: 'الصنف غير موجود' });
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const existing = await txQuery(tx, `
+      SELECT ProductId, ISNULL(ProductName, N'') AS name, ISNULL(ProductCode, N'') AS code
+      FROM tblProducts WITH (UPDLOCK, HOLDLOCK) WHERE ProductId = @id
+    `, [{ name: 'id', type: sql.Numeric(28, 0), value: id }]);
+    if (!existing.recordset[0]) throw new Error('الصنف غير موجود');
+    const blockers = await txQuery(tx, `
+      SELECT TOP 1 reason FROM (
+        SELECT N'حركات مخزون' AS reason FROM tblInventory WHERE ProductID = @id
+        UNION ALL SELECT N'فواتير بيع' FROM tblSellingInvoicesDetails WHERE ProductID = @id
+        UNION ALL SELECT N'فواتير شراء' FROM tblPurchaseInvoicesDetails WHERE ProductID = @id
+        UNION ALL SELECT N'رصيد في مخزن' FROM tblProductsStores WHERE ProductID = @id AND ISNULL(ProductStock, 0) <> 0
+      ) x
+    `, [{ name: 'id', type: sql.Numeric(28, 0), value: id }]);
+    if (blockers.recordset[0]) throw new Error(`لا يمكن حذف الصنف لوجود ${blockers.recordset[0].reason}`);
+    await txQuery(tx, `DELETE FROM tblClients_Products WHERE ProductID = @id`, [
+      { name: 'id', type: sql.Numeric(28, 0), value: id }
+    ]);
+    await txQuery(tx, `DELETE FROM tblSuppliers_Products WHERE ProductID = @id`, [
+      { name: 'id', type: sql.Numeric(28, 0), value: id }
+    ]);
+    await txQuery(tx, `DELETE FROM tblProductsStores WHERE ProductID = @id`, [
+      { name: 'id', type: sql.Numeric(28, 0), value: id }
+    ]);
+    await txQuery(tx, `DELETE FROM tblProducts WHERE ProductId = @id`, [
+      { name: 'id', type: sql.Numeric(28, 0), value: id }
+    ]);
+    await tx.commit();
+    invalidateProducts();
+    const row = existing.recordset[0];
+    recordActivity(req, { action: 'product', detail: `حذف صنف ${row.code || id} — ${row.name}`, ref: `product:${id}` });
+    res.json({ ok: true });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حذف الصنف' });
   }
 });
 
@@ -2451,20 +2981,22 @@ async function accountByCode(tx, code) {
 
 app.post('/api/sales', requireAuth, async (req, res) => {
   const clientId = Number(req.body.clientId);
-  const storeId = Number(req.body.storeId);
+  const fallbackStoreId = Number(req.body.storeId);
   const notes = String(req.body.notes || '').slice(0, 250);
   const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
-  if (!Number.isFinite(storeId) || storeId < 0 || !lines.length) return res.status(400).json({ error: 'اختر المخزن وأضف صنفاً واحداً على الأقل' });
+  if (!lines.length) return res.status(400).json({ error: 'أضف صنفاً واحداً على الأقل' });
 
   const cleanLines = [];
   for (const line of lines) {
     const productId = Number(line.productId);
     const qty = Number(line.qty);
     const price = Number(line.price);
-    if (!productId || !(qty > 0) || !(price >= 0)) {
-      return res.status(400).json({ error: 'راجع الكمية والسعر لكل صنف' });
+    let storeId = Number(line.storeId);
+    if (!Number.isFinite(storeId) || storeId < 0) storeId = fallbackStoreId;
+    if (!productId || !(qty > 0) || !(price >= 0) || !Number.isFinite(storeId) || storeId < 0) {
+      return res.status(400).json({ error: 'راجع الكمية والسعر والمخزن لكل صنف' });
     }
-    cleanLines.push({ productId, qty, price, total: Math.round(qty * price * 10000) / 10000 });
+    cleanLines.push({ productId, qty, price, storeId, total: Math.round(qty * price * 10000) / 10000 });
   }
   const gross = roundTo(cleanLines.reduce((sum, line) => sum + line.total, 0), 4);
   const priced = applyDiscount(gross, req.body.discount);
@@ -2482,12 +3014,12 @@ app.post('/api/sales', requireAuth, async (req, res) => {
   await tx.begin();
   tx.actor = actorName(req);
   try {
+    const stockSnap = await stockBefore(tx, bodyProductIds(req.body));
     const client = clientId
       ? (await txQuery(tx, `SELECT ClientId, ISNULL(ClientName, N'') AS name, ISNULL(AccCode, N'') AS accCode FROM tblClients WHERE ClientId = @id`, [{ name: 'id', type: sql.Numeric(18, 0), value: clientId }])).recordset[0]
       : { ClientId: 0, name: 'عميل نقدي', accCode: '' };
     if (clientId && !client) throw new Error('العميل غير موجود');
-    const store = (await txQuery(tx, `SELECT StoreID FROM tblStores WHERE StoreID = @id`, [{ name: 'id', type: sql.Numeric(18, 0), value: storeId }])).recordset[0];
-    if (!store) throw new Error('المخزن غير موجود');
+    await assertStores(tx, cleanLines.map((line) => line.storeId));
 
     const salesAccount = await accountByCode(tx, '12210301');
     const cashClearing = await accountByCode(tx, '1221010001');
@@ -2593,7 +3125,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
         VALUES (@pid, @store, 0, 0, 0, 0, 0, 0, 0)
       `, [
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
-        { name: 'store', type: sql.Numeric(18, 0), value: storeId }
+        { name: 'store', type: sql.Numeric(18, 0), value: line.storeId }
       ]);
       await txQuery(tx, `
         INSERT INTO tblInventory
@@ -2607,7 +3139,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
         { name: 'invoiceNo', type: sql.Numeric(18, 0), value: invoiceNo },
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
         { name: 'clientId', type: sql.Numeric(18, 0), value: client.ClientId || 0 },
-        { name: 'store', type: sql.Numeric(18, 0), value: storeId },
+        { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
         { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
         { name: 'price', type: sql.Numeric(18, 4), value: line.price },
         { name: 'lineTotal', type: sql.Numeric(18, 4), value: line.total },
@@ -2628,7 +3160,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
         { name: 'invoiceId', type: sql.Numeric(18, 0), value: invoiceId },
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
         { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
-        { name: 'store', type: sql.Numeric(18, 0), value: storeId },
+        { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
         { name: 'price', type: sql.Numeric(18, 4), value: line.price },
         { name: 'lineTotal', type: sql.Numeric(18, 4), value: line.total },
         { name: 'cost', type: sql.Numeric(18, 4), value: cost },
@@ -2709,6 +3241,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
       ]);
     }
 
+    await stockAfter(tx, stockSnap);
     await tx.commit();
     memoryCache.clear();
     recordActivity(req, { action: 'sale', detail: `فاتورة بيع رقم ${invoiceNo} بإجمالي ${invoiceTotal}`, ref: `sale:${invoiceId}` });
@@ -2722,20 +3255,22 @@ app.post('/api/sales', requireAuth, async (req, res) => {
 
 app.post('/api/purchases', requireAuth, async (req, res) => {
   const supplierId = Number(req.body.supplierId);
-  const storeId = Number(req.body.storeId);
+  const fallbackStoreId = Number(req.body.storeId);
   const notes = String(req.body.notes || '').slice(0, 250);
   const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
-  if (!Number.isFinite(storeId) || storeId < 0 || !lines.length) return res.status(400).json({ error: 'اختر المخزن وأضف صنفاً واحداً على الأقل' });
+  if (!lines.length) return res.status(400).json({ error: 'أضف صنفاً واحداً على الأقل' });
 
   const cleanLines = [];
   for (const line of lines) {
     const productId = Number(line.productId);
     const qty = Number(line.qty);
     const price = Number(line.price);
-    if (!productId || !(qty > 0) || !(price >= 0)) {
-      return res.status(400).json({ error: 'راجع الكمية والسعر لكل صنف' });
+    let storeId = Number(line.storeId);
+    if (!Number.isFinite(storeId) || storeId < 0) storeId = fallbackStoreId;
+    if (!productId || !(qty > 0) || !(price >= 0) || !Number.isFinite(storeId) || storeId < 0) {
+      return res.status(400).json({ error: 'راجع الكمية والسعر والمخزن لكل صنف' });
     }
-    cleanLines.push({ productId, qty, price, total: Math.round(qty * price * 10000) / 10000 });
+    cleanLines.push({ productId, qty, price, storeId, total: Math.round(qty * price * 10000) / 10000 });
   }
   const gross = roundTo(cleanLines.reduce((sum, line) => sum + line.total, 0), 4);
   const priced = applyDiscount(gross, req.body.discount);
@@ -2752,12 +3287,12 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
   await tx.begin();
   tx.actor = actorName(req);
   try {
+    const stockSnap = await stockBefore(tx, bodyProductIds(req.body));
     const supplier = supplierId
       ? (await txQuery(tx, `SELECT SupplierID, ISNULL(SupplierName, N'') AS name, ISNULL(AccCode, N'') AS accCode FROM tblSuppliers WHERE SupplierID = @id`, [{ name: 'id', type: sql.Numeric(18, 0), value: supplierId }])).recordset[0]
       : { SupplierID: 0, name: 'مشتريات نقدية', accCode: '2423' };
     if (supplierId && !supplier) throw new Error('المورد غير موجود');
-    const store = (await txQuery(tx, `SELECT StoreID FROM tblStores WHERE StoreID = @id`, [{ name: 'id', type: sql.Numeric(18, 0), value: storeId }])).recordset[0];
-    if (!store) throw new Error('المخزن غير موجود');
+    await assertStores(tx, cleanLines.map((line) => line.storeId));
 
     const purchasesAccount = await accountByCode(tx, '2424');
     const safeAccount = await accountByCode(tx, '12601');
@@ -2853,7 +3388,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
         VALUES (@pid, @store, 0, 0, 0, 0, 0, 0, 0)
       `, [
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
-        { name: 'store', type: sql.Numeric(18, 0), value: storeId }
+        { name: 'store', type: sql.Numeric(18, 0), value: line.storeId }
       ]);
       await txQuery(tx, `
         INSERT INTO tblInventory
@@ -2866,7 +3401,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
         { name: 'invoiceNo', type: sql.Numeric(18, 0), value: invoiceNo },
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
         { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
-        { name: 'store', type: sql.Numeric(18, 0), value: storeId },
+        { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
         { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
         { name: 'price', type: sql.Numeric(18, 4), value: line.price },
         { name: 'guid', type: sql.UniqueIdentifier, value: guid }
@@ -2884,7 +3419,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
         { name: 'invoiceId', type: sql.Numeric(18, 0), value: invoiceId },
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
         { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
-        { name: 'store', type: sql.Numeric(18, 0), value: storeId },
+        { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
         { name: 'price', type: sql.Numeric(18, 4), value: line.price },
         { name: 'lineTotal', type: sql.Numeric(18, 4), value: line.total },
         { name: 'guid', type: sql.UniqueIdentifier, value: guid }
@@ -2964,6 +3499,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
       ]);
     }
 
+    await stockAfter(tx, stockSnap);
     await tx.commit();
     memoryCache.clear();
     recordActivity(req, { action: 'purchase', detail: `فاتورة شراء رقم ${invoiceNo} بإجمالي ${invoiceTotal}`, ref: `purchase:${invoiceId}` });
@@ -3079,13 +3615,35 @@ async function createPartyAccount(tx, parentCode, id, name) {
     WHERE AccCode = @code
   `, [{ name: 'code', type: sql.NVarChar(50), value: parentCode }])).recordset[0];
   if (!parent) throw new Error('حساب المجموعة غير موجود');
-  const width = Number(parent.SubsDigits) - String(parent.AccCode).length;
-  if (width < 1 || String(id).length > width) throw new Error('تعذر توليد كود الحساب');
-  const code = `${parent.AccCode}${String(id).padStart(width, '0')}`;
-  const taken = await txQuery(tx, `SELECT AccountId FROM tblAccTree WHERE AccCode = @code`, [
-    { name: 'code', type: sql.NVarChar(50), value: code }
-  ]);
-  if (taken.recordset[0]) throw new Error('كود الحساب مستخدم');
+  const parentStr = String(parent.AccCode);
+  const width = Number(parent.SubsDigits) - parentStr.length;
+  if (width < 1) throw new Error('تعذر توليد كود الحساب');
+  const last = (await txQuery(tx, `
+    SELECT TOP 1 AccCode
+    FROM tblAccTree WITH (UPDLOCK, HOLDLOCK)
+    WHERE AccParent = @parent
+    ORDER BY AccCode DESC
+  `, [{ name: 'parent', type: sql.NVarChar(50), value: parentStr }])).recordset[0];
+  let n = 1;
+  if (last && last.AccCode != null) {
+    const suffix = String(last.AccCode).slice(parentStr.length);
+    if (/^\d+$/.test(suffix)) n = Number(suffix) + 1;
+    else if (id) n = Number(id) || 1;
+  }
+  let code = null;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (String(n).length > width) throw new Error('تعذر توليد كود الحساب');
+    const candidate = `${parentStr}${String(n).padStart(width, '0')}`;
+    const taken = await txQuery(tx, `SELECT AccountId FROM tblAccTree WHERE AccCode = @code`, [
+      { name: 'code', type: sql.NVarChar(50), value: candidate }
+    ]);
+    if (!taken.recordset[0]) {
+      code = candidate;
+      break;
+    }
+    n += 1;
+  }
+  if (!code) throw new Error('تعذر توليد كود الحساب');
   await txQuery(tx, `
     INSERT INTO tblAccTree
       (AccCode, AccName, CurLevel, AccType, AccParent, AccCloseIn, HaveSub, AccDis, CompCode, StartDate, SubsDigits, RowGuid)
@@ -3096,7 +3654,7 @@ async function createPartyAccount(tx, parentCode, id, name) {
     { name: 'name', type: sql.NVarChar(100), value: name },
     { name: 'level', type: sql.Int, value: Number(parent.CurLevel) + 1 },
     { name: 'type', type: sql.Int, value: Number(parent.AccType) },
-    { name: 'parent', type: sql.NVarChar(50), value: String(parent.AccCode) },
+    { name: 'parent', type: sql.NVarChar(50), value: parentStr },
     { name: 'digits', type: sql.Int, value: Number(parent.SubsDigits) + 1 }
   ]);
   return code;
@@ -3162,6 +3720,140 @@ app.post('/api/suppliers', requireAuth, async (req, res) => {
   }
 });
 
+app.put('/api/clients/:id', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id < 0) return res.status(400).json({ error: 'العميل غير موجود' });
+  const item = partyInput(req.body);
+  if (item.error) return res.status(400).json({ error: item.error });
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const existing = await txQuery(tx, `
+      SELECT ClientId, ISNULL(AccCode, N'') AS accCode
+      FROM tblClients WITH (UPDLOCK, HOLDLOCK) WHERE ClientId = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
+    if (!existing.recordset[0]) throw new Error('العميل غير موجود');
+    await txQuery(tx, `
+      UPDATE tblClients SET ClientName = @name, PhoneNo = @phone, MobilNo = @phone WHERE ClientId = @id
+    `, [
+      { name: 'id', type: sql.Numeric(18, 0), value: id },
+      { name: 'name', type: sql.NVarChar(50), value: item.name },
+      { name: 'phone', type: sql.NVarChar(20), value: item.phone }
+    ]);
+    await renameAccount(tx, existing.recordset[0].accCode, item.name);
+    await tx.commit();
+    recordActivity(req, { action: 'client', detail: `تعديل عميل ${item.name}`, ref: `client:${id}` });
+    res.json({ ok: true, id, name: item.name, phone: item.phone });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حفظ العميل' });
+  }
+});
+
+app.delete('/api/clients/:id', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id < 0) return res.status(400).json({ error: 'العميل غير موجود' });
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const existing = await txQuery(tx, `
+      SELECT ClientId, ISNULL(ClientName, N'') AS name, ISNULL(AccCode, N'') AS accCode
+      FROM tblClients WITH (UPDLOCK, HOLDLOCK) WHERE ClientId = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
+    if (!existing.recordset[0]) throw new Error('العميل غير موجود');
+    const blockers = await txQuery(tx, `
+      SELECT TOP 1 reason FROM (
+        SELECT N'فواتير بيع' AS reason FROM tblSellingInvoice WHERE ClientID = @id
+        UNION ALL SELECT N'مرتجعات بيع' FROM tblReturnSellPermission WHERE ClientID = @id
+      ) x
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
+    if (blockers.recordset[0]) throw new Error(`لا يمكن حذف العميل لوجود ${blockers.recordset[0].reason}`);
+    await txQuery(tx, `DELETE FROM tblClients WHERE ClientId = @id`, [
+      { name: 'id', type: sql.Numeric(18, 0), value: id }
+    ]);
+    await tryDeleteUnusedAccount(tx, existing.recordset[0].accCode);
+    await tx.commit();
+    recordActivity(req, { action: 'client', detail: `حذف عميل ${existing.recordset[0].name}`, ref: `client:${id}` });
+    res.json({ ok: true });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حذف العميل' });
+  }
+});
+
+app.put('/api/suppliers/:id', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id < 0) return res.status(400).json({ error: 'المورد غير موجود' });
+  const item = partyInput(req.body);
+  if (item.error) return res.status(400).json({ error: item.error });
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const existing = await txQuery(tx, `
+      SELECT SupplierID, ISNULL(AccCode, N'') AS accCode
+      FROM tblSuppliers WITH (UPDLOCK, HOLDLOCK) WHERE SupplierID = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
+    if (!existing.recordset[0]) throw new Error('المورد غير موجود');
+    await txQuery(tx, `
+      UPDATE tblSuppliers SET SupplierName = @name, PhoneNo = @phone, MobilNo = @phone WHERE SupplierID = @id
+    `, [
+      { name: 'id', type: sql.Numeric(18, 0), value: id },
+      { name: 'name', type: sql.NVarChar(50), value: item.name },
+      { name: 'phone', type: sql.NVarChar(20), value: item.phone }
+    ]);
+    await renameAccount(tx, existing.recordset[0].accCode, item.name);
+    await tx.commit();
+    recordActivity(req, { action: 'supplier', detail: `تعديل مورد ${item.name}`, ref: `supplier:${id}` });
+    res.json({ ok: true, id, name: item.name, phone: item.phone });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حفظ المورد' });
+  }
+});
+
+app.delete('/api/suppliers/:id', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id < 0) return res.status(400).json({ error: 'المورد غير موجود' });
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const existing = await txQuery(tx, `
+      SELECT SupplierID, ISNULL(SupplierName, N'') AS name, ISNULL(AccCode, N'') AS accCode
+      FROM tblSuppliers WITH (UPDLOCK, HOLDLOCK) WHERE SupplierID = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
+    if (!existing.recordset[0]) throw new Error('المورد غير موجود');
+    const blockers = await txQuery(tx, `
+      SELECT TOP 1 reason FROM (
+        SELECT N'فواتير شراء' AS reason FROM tblPurchaseInvoice WHERE SupplierID = @id
+        UNION ALL SELECT N'مرتجعات شراء' FROM tblReturnPurchasePermission WHERE SupplierID = @id
+      ) x
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
+    if (blockers.recordset[0]) throw new Error(`لا يمكن حذف المورد لوجود ${blockers.recordset[0].reason}`);
+    await txQuery(tx, `DELETE FROM tblSuppliers WHERE SupplierID = @id`, [
+      { name: 'id', type: sql.Numeric(18, 0), value: id }
+    ]);
+    await tryDeleteUnusedAccount(tx, existing.recordset[0].accCode);
+    await tx.commit();
+    recordActivity(req, { action: 'supplier', detail: `حذف مورد ${existing.recordset[0].name}`, ref: `supplier:${id}` });
+    res.json({ ok: true });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حذف المورد' });
+  }
+});
+
 app.post('/api/transfers', requireAuth, async (req, res) => {
   const fromStoreId = Number(req.body.fromStoreId);
   const toStoreId = Number(req.body.toStoreId);
@@ -3184,6 +3876,7 @@ app.post('/api/transfers', requireAuth, async (req, res) => {
   await tx.begin();
   tx.actor = actorName(req);
   try {
+    const stockSnap = await stockBefore(tx, bodyProductIds(req.body));
     await assertStores(tx, [fromStoreId, toStoreId]);
     const docNo = await nextNumber(tx, 'tblStockTransfer', 'StockTransferDocID');
     const header = await txQuery(tx, `
@@ -3247,6 +3940,7 @@ app.post('/api/transfers', requireAuth, async (req, res) => {
         { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
     }
+    await stockAfter(tx, stockSnap);
     await tx.commit();
     memoryCache.clear();
     recordActivity(req, { action: 'transfer', detail: `تحويل مخزن رقم ${docNo}`, ref: `transfer:${transferId}` });
@@ -3255,6 +3949,225 @@ app.post('/api/transfers', requireAuth, async (req, res) => {
     try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
     console.error(error);
     res.status(400).json({ error: error.message || 'تعذر حفظ التحويل' });
+  }
+});
+
+app.get('/api/stock/balance', requireAuth, async (req, res) => {
+  try {
+    const productId = Number(req.query.productId);
+    const storeId = Number(req.query.storeId);
+    if (!productId || !Number.isFinite(storeId) || storeId < 0) {
+      return res.status(400).json({ error: 'اختر الصنف والمخزن' });
+    }
+    const rows = await runQuery(`
+      SELECT ISNULL(ps.ProductStock, 0) AS qty
+      FROM tblProductsStores ps
+      WHERE ps.ProductID = @pid AND ps.StoreID = @store AND ps.CompCode = 0
+    `, [
+      { name: 'pid', type: sql.Numeric(18, 0), value: productId },
+      { name: 'store', type: sql.Numeric(18, 0), value: storeId }
+    ]);
+    res.json({ productId, storeId, qty: rows[0] ? Number(rows[0].qty) : 0 });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'تعذر قراءة رصيد الصنف' });
+  }
+});
+
+app.get('/api/stocktakings', requireAuth, async (req, res) => {
+  try {
+    const { page, pageSize, start, end } = paging(req);
+    const store = chosenStore(req.query.storeId);
+    const filters = [
+      { name: 'storeId', type: sql.Int, value: store == null ? 0 : store },
+      { name: 'allStores', type: sql.Int, value: store == null ? 1 : 0 }
+    ];
+    const where = `
+      FROM tblStockTaking st
+      WHERE (@allStores = 1 OR EXISTS (
+        SELECT 1 FROM tblStockTakingDetails d WHERE d.StockTakingID = st.StockTakingID AND d.StoreID = @storeId
+      ))`;
+    const pageSql = start === 1
+      ? `SELECT TOP (@pageSize)
+          st.StockTakingID AS id,
+          st.StockTakingDocID AS no,
+          st.StockTakingDocDate AS date,
+          ISNULL(st.Notes, N'') AS notes,
+          ISNULL(st.InsertedBy, N'') AS byName,
+          (SELECT COUNT(*) FROM tblStockTakingDetails d WHERE d.StockTakingID = st.StockTakingID) AS lines
+        ${where}
+        ORDER BY st.StockTakingDocID DESC`
+      : `WITH numbered AS (
+          SELECT
+            st.StockTakingID AS id,
+            st.StockTakingDocID AS no,
+            st.StockTakingDocDate AS date,
+            ISNULL(st.Notes, N'') AS notes,
+            ISNULL(st.InsertedBy, N'') AS byName,
+            (SELECT COUNT(*) FROM tblStockTakingDetails d WHERE d.StockTakingID = st.StockTakingID) AS lines,
+            ROW_NUMBER() OVER (ORDER BY st.StockTakingDocID DESC) AS rn
+          ${where}
+        )
+        SELECT id, no, date, notes, byName, lines
+        FROM numbered
+        WHERE rn BETWEEN @start AND @end
+        ORDER BY rn`;
+    const [rows, total] = await Promise.all([
+      runQuery(pageSql, filters.concat([
+        { name: 'pageSize', type: sql.Int, value: pageSize },
+        { name: 'start', type: sql.Int, value: start },
+        { name: 'end', type: sql.Int, value: end }
+      ])),
+      cached(`stocktakings:${store == null ? 'all' : store}`, 20000, async () => {
+        const count = await runQuery(`SELECT COUNT(*) AS total ${where}`, filters);
+        return Number(count[0].total);
+      })
+    ]);
+    res.json({ page, pageSize, total, rows });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'تعذر تحميل الجرد' });
+  }
+});
+
+app.get('/api/stocktakings/:id', requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'مستند الجرد غير موجود' });
+    const header = await runQuery(`
+      SELECT
+        st.StockTakingID AS id,
+        st.StockTakingDocID AS no,
+        st.StockTakingDocDate AS date,
+        ISNULL(st.Notes, N'') AS notes,
+        ISNULL(st.InsertedBy, N'') AS byName
+      FROM tblStockTaking st
+      WHERE st.StockTakingID = @id
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
+    if (!header[0]) return res.status(404).json({ error: 'مستند الجرد غير موجود' });
+    const lines = await runQuery(`
+      SELECT
+        d.DetailID AS lineId,
+        d.StoreID AS storeId,
+        ISNULL(s.StoreName, N'') AS storeName,
+        d.ProductID AS productId,
+        ISNULL(p.ProductCode, N'') AS code,
+        ISNULL(p.ProductName, N'') AS name,
+        ISNULL(d.ProductStock, 0) AS bookQty,
+        ISNULL(d.CurStock, 0) AS countedQty,
+        ISNULL(d.Quantity, 0) AS diffQty
+      FROM tblStockTakingDetails d
+      LEFT JOIN tblProducts p ON p.ProductId = d.ProductID
+      LEFT JOIN tblStores s ON s.StoreID = d.StoreID
+      WHERE d.StockTakingID = @id
+      ORDER BY d.DetailID
+    `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
+    res.json({ doc: header[0], lines });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'تعذر فتح مستند الجرد' });
+  }
+});
+
+app.post('/api/stocktakings', requireAuth, async (req, res) => {
+  const storeId = Number(req.body.storeId);
+  const notes = clip(req.body.notes, 250);
+  const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
+  if (!Number.isFinite(storeId) || storeId < 0) return res.status(400).json({ error: 'اختر المخزن' });
+  if (!lines.length) return res.status(400).json({ error: 'أضف صنفاً واحداً على الأقل' });
+
+  const cleanLines = [];
+  const seen = new Set();
+  for (const line of lines) {
+    const productId = Number(line.productId);
+    const countedQty = roundTo(line.countedQty, 5);
+    if (!productId || countedQty == null || countedQty < 0) {
+      return res.status(400).json({ error: 'راجع الكمية الفعلية لكل صنف' });
+    }
+    if (seen.has(productId)) return res.status(400).json({ error: 'صنف مكرر في الجرد' });
+    seen.add(productId);
+    cleanLines.push({ productId, countedQty });
+  }
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  tx.actor = actorName(req);
+  try {
+    const stockSnap = await stockBefore(tx, bodyProductIds(req.body));
+    await assertStores(tx, [storeId]);
+    const docNo = await nextNumber(tx, 'tblStockTaking', 'StockTakingDocID');
+    const header = await txQuery(tx, `
+      INSERT INTO tblStockTaking
+        (StockTakingDocID, StockTakingDocDate, CompCode, Notes, BranchId, InsertedDate, InsertedBy)
+      VALUES
+        (@doc, CAST(GETDATE() AS date), 0, @notes, 0, GETDATE(), @actor);
+      SELECT SCOPE_IDENTITY() AS id;
+    `, [
+      { name: 'doc', type: sql.Numeric(18, 0), value: docNo },
+      { name: 'notes', type: sql.NVarChar(250), value: notes }
+    ]);
+    const stockTakingId = header.recordset[0].id;
+    let adjusted = 0;
+    for (const line of cleanLines) {
+      await assertProduct(tx, line.productId);
+      await ensureStore(tx, line.productId, storeId);
+      const stock = await txQuery(tx, `
+        SELECT ISNULL(ProductStock, 0) AS qty
+        FROM tblProductsStores WITH (UPDLOCK, HOLDLOCK)
+        WHERE ProductID = @pid AND StoreID = @store AND CompCode = 0
+      `, [
+        { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
+        { name: 'store', type: sql.Numeric(18, 0), value: storeId }
+      ]);
+      const bookQty = stock.recordset[0] ? Number(stock.recordset[0].qty) : 0;
+      const diffQty = roundTo(line.countedQty - bookQty, 5);
+      const guid = crypto.randomUUID();
+      await txQuery(tx, `
+        INSERT INTO tblStockTakingDetails
+          (StockTakingID, StoreID, ProductID, Quantity, ProductStock, CurStock, RowGUID, Notes, InsertedDate, InsertedBy)
+        VALUES
+          (@id, @store, @pid, @diff, @book, @counted, @guid, N'', GETDATE(), @actor)
+      `, [
+        { name: 'id', type: sql.Numeric(18, 0), value: stockTakingId },
+        { name: 'store', type: sql.Numeric(18, 0), value: storeId },
+        { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
+        { name: 'diff', type: sql.Numeric(18, 5), value: diffQty },
+        { name: 'book', type: sql.Numeric(18, 5), value: bookQty },
+        { name: 'counted', type: sql.Numeric(18, 5), value: line.countedQty },
+        { name: 'guid', type: sql.UniqueIdentifier, value: guid }
+      ]);
+      if (Math.abs(diffQty) < 0.00001) continue;
+      adjusted += 1;
+      const cost = await latestCost(tx, line.productId);
+      const qtyIn = diffQty > 0 ? diffQty : 0;
+      const qtyOut = diffQty < 0 ? roundTo(-diffQty, 5) : 0;
+      await txQuery(tx, `
+        INSERT INTO tblInventory
+          (InvoiceNo, InvoiceDate, DocumentDate, ProductID, StoreID, InQuantity, InBonus,
+           OutQuantity, OutBonus, LotPricePerUnit, Cost, TransactionID, CompCode, RowGUID)
+        VALUES
+          (@doc, CAST(GETDATE() AS date), CAST(GETDATE() AS date), @pid, @store, @qtyIn, 0,
+           @qtyOut, 0, 0, @cost, 15, 0, @guid)
+      `, [
+        { name: 'doc', type: sql.Numeric(18, 0), value: docNo },
+        { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
+        { name: 'store', type: sql.Numeric(18, 0), value: storeId },
+        { name: 'qtyIn', type: sql.Numeric(18, 5), value: qtyIn },
+        { name: 'qtyOut', type: sql.Numeric(18, 5), value: qtyOut },
+        { name: 'cost', type: sql.Numeric(18, 4), value: cost },
+        { name: 'guid', type: sql.UniqueIdentifier, value: guid }
+      ]);
+    }
+    await stockAfter(tx, stockSnap);
+    await tx.commit();
+    memoryCache.clear();
+    recordActivity(req, { action: 'stocktake', detail: `جرد رقم ${docNo} — ${adjusted} تعديل`, ref: `stocktake:${stockTakingId}` });
+    res.json({ id: stockTakingId, no: docNo, adjusted });
+  } catch (error) {
+    try { await tx.rollback(); } catch (rollbackError) { console.error(rollbackError); }
+    console.error(error);
+    res.status(400).json({ error: error.message || 'تعذر حفظ الجرد' });
   }
 });
 
@@ -3395,6 +4308,57 @@ function returnLines(body) {
   return lines.map((line) => ({ lineId: Number(line.lineId), qty: Number(line.qty) })).filter((line) => line.qty > 0);
 }
 
+function bodyProductIds(body) {
+  const lines = body && Array.isArray(body.lines) ? body.lines : [];
+  return lines.map((line) => Number(line.productId));
+}
+
+async function stockNet(tx, productIds) {
+  const net = new Map();
+  if (!productIds.length) return net;
+  const rows = await txQuery(tx, `
+    SELECT ProductID AS pid, StoreID AS store,
+      SUM(ISNULL(InQuantity, 0) + ISNULL(InBonus, 0) - ISNULL(OutQuantity, 0) - ISNULL(OutBonus, 0)) AS qty
+    FROM tblInventory WITH (UPDLOCK, HOLDLOCK)
+    WHERE ProductID IN (${productIds.join(',')})
+    GROUP BY ProductID, StoreID
+  `);
+  for (const row of rows.recordset) net.set(`${row.pid}:${row.store}`, Number(row.qty) || 0);
+  return net;
+}
+
+async function stockBefore(tx, productIds, detail) {
+  const ids = new Set(productIds.map(Number).filter((id) => Number.isInteger(id) && id > 0));
+  if (detail) {
+    const rows = await txQuery(tx, `SELECT DISTINCT ProductID AS pid FROM ${detail.table} WHERE ${detail.key} = @id`, [
+      { name: 'id', type: sql.Numeric(18, 0), value: detail.id }
+    ]);
+    for (const row of rows.recordset) ids.add(Number(row.pid));
+  }
+  const products = [...ids];
+  return { products, before: await stockNet(tx, products) };
+}
+
+// ProductStock is a running balance kept by the old program too, so apply only this transaction's movement delta.
+async function stockAfter(tx, snap) {
+  const after = await stockNet(tx, snap.products);
+  for (const key of new Set([...snap.before.keys(), ...after.keys()])) {
+    const delta = roundTo((after.get(key) || 0) - (snap.before.get(key) || 0), 5);
+    if (!delta) continue;
+    const [productId, storeId] = key.split(':').map(Number);
+    await ensureStore(tx, productId, storeId);
+    await txQuery(tx, `
+      UPDATE tblProductsStores SET ProductStock = ISNULL(ProductStock, 0) + @delta
+      WHERE ProductID = @pid AND StoreID = @store AND CompCode = 0;
+      UPDATE tblProducts SET ProductStock = ISNULL(ProductStock, 0) + @delta WHERE ProductId = @pid;
+    `, [
+      { name: 'delta', type: sql.Numeric(18, 5), value: delta },
+      { name: 'pid', type: sql.Numeric(18, 0), value: productId },
+      { name: 'store', type: sql.Numeric(18, 0), value: storeId }
+    ]);
+  }
+}
+
 async function ensureStore(tx, productId, storeId) {
   await txQuery(tx, `
     IF NOT EXISTS (
@@ -3422,6 +4386,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
   await tx.begin();
   tx.actor = actorName(req);
   try {
+    const stockSnap = await stockBefore(tx, bodyProductIds(req.body), { table: 'tblSellingInvoicesDetails', key: 'SellingInvoiceID', id: invoiceId });
     const headerRow = await txQuery(tx, `
       SELECT SellingInvoiceNo AS no, ClientID AS clientId, JournalEntryID AS journalId,
         ISNULL(SellingInvoiceTotalAmount, 0) AS total, ISNULL(TotalCollectedAmount, 0) AS paid,
@@ -3680,6 +4645,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
       mergeDebits(debitParts).map((part) => ({ account: part.account, debit: part.amount, credit: 0, text: saleText }))
         .concat([{ account: salesAccount, debit: 0, credit: net, text: `مبيعات - (${client.name})` }])
     );
+    await stockAfter(tx, stockSnap);
     await tx.commit();
     memoryCache.clear();
     recordActivity(req, { action: 'sale', detail: `تعديل فاتورة بيع رقم ${header.no} بإجمالي ${net}`, ref: `sale:${invoiceId}` });
@@ -3702,6 +4668,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
   await tx.begin();
   tx.actor = actorName(req);
   try {
+    const stockSnap = await stockBefore(tx, bodyProductIds(req.body), { table: 'tblPurchaseInvoicesDetails', key: 'PurchaseInvoiceID', id: invoiceId });
     const headerRow = await txQuery(tx, `
       SELECT PurchaseInvoiceNo AS no, SupplierID AS supplierId, JournalEntryID AS journalId,
         ISNULL(PurchaseInvoiceTotalAmount, 0) AS total, ISNULL(TotalPaiedAmount, 0) AS paid,
@@ -3950,6 +4917,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
         { account: counterAccount, debit: 0, credit: net, text: `مشتريات - (${supplier.name})` }
       ]
     );
+    await stockAfter(tx, stockSnap);
     await tx.commit();
     memoryCache.clear();
     recordActivity(req, { action: 'purchase', detail: `تعديل فاتورة شراء رقم ${header.no} بإجمالي ${net}`, ref: `purchase:${invoiceId}` });
@@ -3970,6 +4938,7 @@ app.post('/api/sales/:id/return', requireAuth, async (req, res) => {
   await tx.begin();
   tx.actor = actorName(req);
   try {
+    const stockSnap = await stockBefore(tx, [], { table: 'tblSellingInvoicesDetails', key: 'SellingInvoiceID', id: invoiceId });
     const header = (await txQuery(tx, `
       SELECT si.SellingInvoiceNo AS no, ISNULL(si.ClientID, 0) AS clientId,
              ISNULL(si.SellingInvoiceTotalAmount, 0) AS total, ISNULL(si.TotalCollectedAmount, 0) AS collected,
@@ -4176,6 +5145,7 @@ app.post('/api/sales/:id/return', requireAuth, async (req, res) => {
         { name: 'journalId', type: sql.Numeric(18, 0), value: safeJournalId }
       ]);
     }
+    await stockAfter(tx, stockSnap);
     await tx.commit();
     memoryCache.clear();
     recordActivity(req, { action: 'return', detail: `مرتجع بيع رقم ${returnNo} لفاتورة ${header.no} بإجمالي ${invoiceTotal}`, ref: `sale:${invoiceId}` });
@@ -4196,6 +5166,7 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
   await tx.begin();
   tx.actor = actorName(req);
   try {
+    const stockSnap = await stockBefore(tx, [], { table: 'tblPurchaseInvoicesDetails', key: 'PurchaseInvoiceID', id: invoiceId });
     const header = (await txQuery(tx, `
       SELECT pi.PurchaseInvoiceNo AS no, ISNULL(pi.SupplierID, 0) AS supplierId,
              ISNULL(pi.PurchaseInvoiceTotalAmount, 0) AS total, ISNULL(pi.TotalPaiedAmount, 0) AS paid,
@@ -4401,6 +5372,7 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
         { name: 'journalId', type: sql.Numeric(18, 0), value: safeJournalId }
       ]);
     }
+    await stockAfter(tx, stockSnap);
     await tx.commit();
     memoryCache.clear();
     recordActivity(req, { action: 'return', detail: `مرتجع شراء رقم ${returnNo} لفاتورة ${header.no} بإجمالي ${invoiceTotal}`, ref: `purchase:${invoiceId}` });
