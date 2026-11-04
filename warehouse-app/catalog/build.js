@@ -109,7 +109,7 @@ async function buildSite({ catalog, products, availability, mediaDir, siteDir, b
       }
       for (const p of list) {
         const similar = p.sectionId
-          ? list.filter((x) => x.id !== p.id && x.sectionId === p.sectionId).slice(0, 8).map(({ available, ...s }) => s)
+          ? list.filter((x) => x.id !== p.id && x.sectionId === p.sectionId).slice(0, 8)
           : [];
         write(`${lang}/p/${p.id}/index.html`, T.productPage(lang, site, p, similar));
         urls.push(`/${lang}/p/${p.id}/`);

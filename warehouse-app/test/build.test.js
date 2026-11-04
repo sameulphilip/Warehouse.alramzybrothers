@@ -62,7 +62,12 @@ test('no generated file leaks hidden fields, unpublished products or prices', as
   assert.doesNotMatch(text, /98765/);
   assert.match(text, /PN-VISIBLE/);
   const pump = fs.readFileSync(path.join(s.siteDir, 'ar/p/2/index.html'), 'utf8');
-  assert.doesNotMatch(pump, /class="badge/);
+  const info = pump.slice(pump.indexOf('<div class="info">'), pump.indexOf('<div class="actions">'));
+  assert.ok(info.length > 0);
+  assert.doesNotMatch(info, /class="badge/);
+  assert.match(pump, /class="card" href="\/ar\/p\/1\/"/);
+  const afterActions = pump.slice(pump.indexOf('<div class="actions">'));
+  assert.match(afterActions, /class="badge in"/);
 });
 
 test('rebuilding replaces the old site and leaves no temporary folders', async () => {
