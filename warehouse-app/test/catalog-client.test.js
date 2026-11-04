@@ -36,6 +36,29 @@ test('waLink encodes the message', () => {
   assert.equal(client.waLink('201001234567', 'a b\nc'), 'https://wa.me/201001234567?text=a%20b%0Ac');
 });
 
+test('sanitizeList keeps only well-formed request entries', () => {
+  assert.deepEqual(client.sanitizeList(null), []);
+  assert.deepEqual(client.sanitizeList('x'), []);
+  const malicious = client.sanitizeList([
+    { id: 'a', name: 'n', part: 'p', qty: '"><img src=x onerror=alert(1)>' },
+  ]);
+  assert.equal(malicious[0].qty, 1);
+  const highQty = client.sanitizeList([{ id: 'b', name: 'n', part: '', qty: 5000 }]);
+  assert.equal(highQty[0].qty, 999);
+  assert.deepEqual(client.sanitizeList([{ name: 'no id', qty: 1 }]), []);
+  const numericId = client.sanitizeList([{ id: 7, name: 'seven', part: '', qty: 2 }]);
+  assert.equal(numericId[0].id, '7');
+  const dupes = client.sanitizeList([
+    { id: 'd', name: 'first', part: '', qty: 1 },
+    { id: 'd', name: 'second', part: '', qty: 3 },
+  ]);
+  assert.equal(dupes.length, 1);
+  assert.equal(dupes[0].name, 'first');
+  const longName = 'x'.repeat(250);
+  const truncated = client.sanitizeList([{ id: 'l', name: longName, part: '', qty: 1 }]);
+  assert.equal(truncated[0].name.length, 200);
+});
+
 test('request list helpers add, change and remove items', () => {
   let list = client.addItem([], { id: '7', name: 'أ', part: 'P' });
   list = client.addItem(list, { id: '7', name: 'أ', part: 'P' });

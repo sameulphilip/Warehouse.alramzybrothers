@@ -62,7 +62,44 @@
     return list.filter((entry) => entry.id !== id);
   }
 
-  const api = { normalize, matches, productMessage, requestMessage, waLink, addItem, setQty, removeItem };
+  function capString(value, maxLen) {
+    return String(value || '').trim().slice(0, maxLen);
+  }
+
+  function sanitizeQty(qty) {
+    const n = Math.floor(Number(qty));
+    if (!Number.isFinite(n)) return 1;
+    return Math.max(1, Math.min(999, n));
+  }
+
+  function validId(id) {
+    if (typeof id === 'string' && id.length > 0) return true;
+    if (typeof id === 'number' && Number.isFinite(id)) return true;
+    return false;
+  }
+
+  function sanitizeList(value) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    const out = [];
+    for (const raw of value) {
+      if (out.length >= 100) break;
+      if (raw === null || typeof raw !== 'object') continue;
+      if (!validId(raw.id)) continue;
+      const id = String(raw.id);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({
+        id,
+        name: capString(raw.name, 200),
+        part: capString(raw.part, 80),
+        qty: sanitizeQty(raw.qty),
+      });
+    }
+    return out;
+  }
+
+  const api = { normalize, matches, productMessage, requestMessage, waLink, addItem, setQty, removeItem, sanitizeList };
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = api;
     return;
@@ -81,8 +118,7 @@
 
   function load() {
     try {
-      const value = JSON.parse(root.localStorage.getItem(STORAGE_KEY) || '[]');
-      return Array.isArray(value) ? value : [];
+      return sanitizeList(JSON.parse(root.localStorage.getItem(STORAGE_KEY) || '[]'));
     } catch (error) {
       return [];
     }
@@ -105,7 +141,7 @@
       el.hidden = total === 0;
     });
     panel.querySelector('[data-request-rows]').innerHTML = list.length
-      ? list.map((entry) => `<li><span><strong>${esc(entry.name)}</strong>${entry.part ? `<small>${esc(labels.partNumber)}: ${esc(entry.part)}</small>` : ''}</span><input type="number" min="1" max="999" value="${entry.qty}" data-qty="${esc(entry.id)}" aria-label="${esc(labels.qty)}"><button type="button" data-remove="${esc(entry.id)}" aria-label="${esc(labels.remove)}">×</button></li>`).join('')
+      ? list.map((entry) => `<li><span><strong>${esc(entry.name)}</strong>${entry.part ? `<small>${esc(labels.partNumber)}: ${esc(entry.part)}</small>` : ''}</span><input type="number" min="1" max="999" value="${esc(String(entry.qty))}" data-qty="${esc(entry.id)}" aria-label="${esc(labels.qty)}"><button type="button" data-remove="${esc(entry.id)}" aria-label="${esc(labels.remove)}">×</button></li>`).join('')
       : `<li class="empty">${esc(labels.empty)}</li>`;
     const send = panel.querySelector('[data-request-send]');
     send.hidden = !list.length || !wa;
