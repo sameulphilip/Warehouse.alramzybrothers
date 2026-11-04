@@ -6,6 +6,8 @@ function publishedIds(catalog) {
   return Object.values(catalog.items).filter((item) => item.published).map((item) => Number(item.productId));
 }
 
+const AVAILABILITY_ERROR = 'تعذر تحديث التوفر من قاعدة البيانات';
+
 function signature(map) {
   return JSON.stringify([...map.entries()].sort((a, b) => a[0] - b[0]));
 }
@@ -14,7 +16,8 @@ function createPublisher({ store, snapshotFile, mediaDir, siteDir, baseUrl, logo
   let running = null;
   let runningIsPublish = false;
   let pendingPublish = null;
-  let lastSignature = null;
+  let lastSignature = store.load().availabilitySignature || null;
+  const nextFile = `${snapshotFile}.next`;
 
   function readSnapshot() {
     try {
@@ -24,28 +27,72 @@ function createPublisher({ store, snapshotFile, mediaDir, siteDir, baseUrl, logo
     }
   }
 
-  function writeSnapshot(catalog) {
-    fs.mkdirSync(path.dirname(snapshotFile), { recursive: true });
-    const temp = `${snapshotFile}.tmp`;
-    fs.writeFileSync(temp, JSON.stringify(catalog));
-    fs.renameSync(temp, snapshotFile);
+  function writeJson(file, data) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const temp = `${file}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify(data));
+    fs.renameSync(temp, file);
+  }
+
+  function removeQuietly(file) {
+    try {
+      fs.unlinkSync(file);
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.error('catalog snapshot cleanup', error.message);
+    }
   }
 
   async function run(catalog, fromSnapshot) {
     const ids = publishedIds(catalog);
     const [products, availability] = await Promise.all([loadProducts(ids), loadAvailability(ids)]);
-    if (!fromSnapshot) writeSnapshot(catalog);
-    const result = await build({ catalog, products, availability, mediaDir, siteDir, baseUrl, logoFallback });
-    lastSignature = signature(availability);
-    if (fromSnapshot) return { ...result, publishedAt: store.load().publishedAt };
+    if (!fromSnapshot) writeJson(nextFile, catalog);
+    let result;
+    try {
+      result = await build({ catalog, products, availability, mediaDir, siteDir, baseUrl, logoFallback });
+      if (!fromSnapshot) fs.renameSync(nextFile, snapshotFile);
+    } catch (error) {
+      if (!fromSnapshot) removeQuietly(nextFile);
+      throw error;
+    }
+    const currentSignature = signature(availability);
+    lastSignature = currentSignature;
+    if (fromSnapshot) {
+      store.update((data) => { data.availabilitySignature = currentSignature; });
+      return { ...result, publishedAt: store.load().publishedAt };
+    }
     const publishedAt = new Date().toISOString();
     store.update((data) => {
       data.publishedAt = publishedAt;
       data.lastError = '';
+      data.availabilitySignature = currentSignature;
     });
     return { ...result, publishedAt };
   }
 
+  function forgetIn(file, productId, imageId) {
+    let snapshot;
+    try {
+      snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (error) {
+      if (error.code === 'ENOENT') return;
+      throw error;
+    }
+    const key = String(productId);
+    if (!snapshot.items || !snapshot.items[key]) return;
+    if (imageId === undefined) {
+      delete snapshot.items[key];
+    } else {
+      const images = snapshot.items[key].images || [];
+      if (!images.includes(imageId)) return;
+      snapshot.items[key].images = images.filter((id) => id !== imageId);
+    }
+    writeJson(file, snapshot);
+  }
+
+  function forget(productId, imageId) {
+    forgetIn(snapshotFile, productId, imageId);
+    forgetIn(nextFile, productId, imageId);
+  }
   function start(catalog, fromSnapshot) {
     runningIsPublish = !fromSnapshot;
     running = run(catalog, fromSnapshot)
@@ -76,14 +123,21 @@ function createPublisher({ store, snapshotFile, mediaDir, siteDir, baseUrl, logo
     if (running || pendingPublish) return false;
     const snapshot = readSnapshot();
     if (!snapshot || !store.load().publishedAt) return false;
-    const availability = await loadAvailability(publishedIds(snapshot));
+    let availability;
+    try {
+      availability = await loadAvailability(publishedIds(snapshot));
+    } catch (error) {
+      store.update((data) => { data.lastError = AVAILABILITY_ERROR; });
+      throw error;
+    }
+    if (store.load().lastError === AVAILABILITY_ERROR) store.update((data) => { data.lastError = ''; });
     if (lastSignature !== null && signature(availability) === lastSignature) return false;
     if (running || pendingPublish) return false;
     await start(snapshot, true);
     return true;
   }
 
-  return { publish, refreshAvailability };
+  return { publish, refreshAvailability, forget };
 }
 
 module.exports = { createPublisher };
