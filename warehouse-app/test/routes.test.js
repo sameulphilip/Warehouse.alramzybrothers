@@ -168,3 +168,64 @@ test('a failed logo save removes the uploaded image', async (t) => {
     : [];
   assert.equal(webps.length, 0);
 });
+
+function blockMediaCleanup(mediaDir, imageId) {
+  const lg = path.join(mediaDir, `${imageId}-lg.webp`);
+  fs.unlinkSync(lg);
+  fs.mkdirSync(lg);
+}
+
+test('explicit statuses are preserved', async (t) => {
+  const s = await start();
+  t.after(() => s.server.close());
+  await s.call('PUT', '/api/catalog/items/7212', { nameAr: 'x' });
+  const r = await s.call('DELETE', '/api/catalog/items/7212/images/notanimageid');
+  assert.equal(r.status, 404);
+});
+
+test('deletes succeed and are audited even when media cleanup fails', async (t) => {
+  const prevError = console.error;
+  console.error = () => {};
+  t.after(() => { console.error = prevError; });
+
+  const s = await start();
+  t.after(() => s.server.close());
+
+  await s.call('PUT', '/api/catalog/items/7212', { nameAr: 'x' });
+  let r = await s.call('POST', '/api/catalog/items/7212/images', await png(), { 'Content-Type': 'image/png' });
+  const imageId = r.body.item.images[0];
+  blockMediaCleanup(s.mediaDir, imageId);
+
+  r = await s.call('DELETE', `/api/catalog/items/7212/images/${imageId}`);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.item.images, []);
+  assert.equal(s.records.at(-1).action, 'catalog');
+
+  await s.call('PUT', '/api/catalog/items/7212', { nameAr: 'y' });
+  r = await s.call('POST', '/api/catalog/items/7212/images', await png(), { 'Content-Type': 'image/png' });
+  const secondId = r.body.item.images[0];
+  blockMediaCleanup(s.mediaDir, secondId);
+
+  r = await s.call('DELETE', '/api/catalog/items/7212');
+  assert.equal(r.status, 200);
+  assert.equal(s.store.load().items['7212'], undefined);
+  assert.equal(s.records.at(-1).action, 'catalog');
+});
+
+test('replacing the logo is audited even when old logo cleanup fails', async (t) => {
+  const prevError = console.error;
+  console.error = () => {};
+  t.after(() => { console.error = prevError; });
+
+  const s = await start();
+  t.after(() => s.server.close());
+
+  let r = await s.call('POST', '/api/catalog/company/logo', await png(), { 'Content-Type': 'image/png' });
+  const firstLogo = r.body.company.logoId;
+  blockMediaCleanup(s.mediaDir, firstLogo);
+
+  r = await s.call('POST', '/api/catalog/company/logo', await png(), { 'Content-Type': 'image/png' });
+  assert.equal(r.status, 200);
+  assert.notEqual(r.body.company.logoId, firstLogo);
+  assert.match(s.records.at(-1).detail, /شعار/);
+});

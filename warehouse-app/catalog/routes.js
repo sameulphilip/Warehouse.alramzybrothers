@@ -18,12 +18,21 @@ function createCatalogRouter({ store, mediaDir, publisher, loadProducts, require
     } catch (error) {
       if (error.status) {
         res.status(error.status).json({ error: error.message || 'تعذر تنفيذ الطلب' });
-      } else if (/[\u0600-\u06FF]/.test(String(error.message || ''))) {
+      } else if (/[\u0621-\u064A]/.test(String(error.message || ''))) {
         res.status(400).json({ error: error.message });
       } else {
         console.error('catalog', error);
         res.status(500).json({ error: 'تعذر تنفيذ الطلب' });
       }
+    }
+  };
+  const cleanupMedia = (ids) => {
+    const list = (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
+    if (!list.length) return;
+    try {
+      list.forEach((id) => deleteImage(id, mediaDir));
+    } catch (error) {
+      console.error('catalog media cleanup', error);
     }
   };
   const productIdOf = (req) => {
@@ -99,13 +108,7 @@ function createCatalogRouter({ store, mediaDir, publisher, loadProducts, require
       return item;
     });
     record(req, { action: 'catalog', detail: `إزالة صنف ${id} من الكتالوج`, ref: `product:${id}` });
-    if (removed) {
-      try {
-        removed.images.forEach((imageId) => deleteImage(imageId, mediaDir));
-      } catch (error) {
-        console.error('catalog media cleanup', error);
-      }
-    }
+    if (removed) cleanupMedia(removed.images);
     res.json({ ok: true });
   }));
 
@@ -144,11 +147,7 @@ function createCatalogRouter({ store, mediaDir, publisher, loadProducts, require
       return entry;
     });
     record(req, { action: 'catalog', detail: `حذف صورة من كتالوج صنف ${id}`, ref: `product:${id}` });
-    try {
-      deleteImage(imageId, mediaDir);
-    } catch (error) {
-      console.error('catalog media cleanup', error);
-    }
+    cleanupMedia(imageId);
     res.json({ item });
   }));
 
@@ -186,8 +185,8 @@ function createCatalogRouter({ store, mediaDir, publisher, loadProducts, require
       deleteImage(imageId, mediaDir);
       throw error;
     }
-    if (previous) deleteImage(previous, mediaDir);
     record(req, { action: 'catalog', detail: 'تغيير شعار الكتالوج' });
+    cleanupMedia(previous);
     res.json({ company });
   }));
 
