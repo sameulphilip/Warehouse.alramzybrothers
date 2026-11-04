@@ -9,7 +9,14 @@ const SIZES = [['lg', 1600, 82], ['sm', 480, 78]];
 
 let sharpModule = null;
 function getSharp() {
-  if (!sharpModule) sharpModule = require('sharp');
+  if (!sharpModule) {
+    try {
+      sharpModule = require('sharp');
+    } catch (error) {
+      console.error('sharp unavailable', error.message);
+      throw new Error('تعذر تجهيز معالجة الصور على السيرفر');
+    }
+  }
   return sharpModule;
 }
 

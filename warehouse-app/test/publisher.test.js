@@ -153,6 +153,29 @@ test('a refresh after forget rebuilds without the deleted item', async () => {
   assert.equal(s.builds.at(-1).catalog.items['1'], undefined);
 });
 
+test('forget during the data load still reaches the next snapshot', async () => {
+  const s = setup([[1, true]]);
+  let releaseLoad;
+  const loadGate = new Promise((resolve) => { releaseLoad = resolve; });
+  const publisher = createPublisher({
+    store: s.store,
+    snapshotFile: path.join(s.dir, 'catalog-published.json'),
+    mediaDir: s.dir, siteDir: path.join(s.dir, 'site'), baseUrl: 'https://c.test', logoFallback: 'logo.png',
+    loadProducts: async (ids) => { await loadGate; return new Map(ids.map((id) => [id, { name: `p${id}`, code: '' }])); },
+    loadAvailability: async (ids) => new Map(ids.map((id) => [id, Boolean(s.state.availability.get(id))])),
+    build: async (args) => {
+      s.builds.push(args);
+      return { buildId: 'x', products: 1, pages: 3 };
+    }
+  });
+  const publishing = publisher.publish();
+  await Promise.resolve();
+  publisher.forget(1);
+  releaseLoad();
+  await publishing;
+  assert.equal(readSnap(s).items['1'], undefined);
+});
+
 test('forget also removes the item from a snapshot that is still being built', async () => {
   const s = setup([[1, true]]);
   let release;

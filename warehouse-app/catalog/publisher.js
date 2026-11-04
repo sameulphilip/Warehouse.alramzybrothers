@@ -43,9 +43,9 @@ function createPublisher({ store, snapshotFile, mediaDir, siteDir, baseUrl, logo
   }
 
   async function run(catalog, fromSnapshot) {
+    if (!fromSnapshot) writeJson(nextFile, catalog);
     const ids = publishedIds(catalog);
     const [products, availability] = await Promise.all([loadProducts(ids), loadAvailability(ids)]);
-    if (!fromSnapshot) writeJson(nextFile, catalog);
     let result;
     try {
       result = await build({ catalog, products, availability, mediaDir, siteDir, baseUrl, logoFallback });

@@ -20,7 +20,7 @@ sftp = client.open_sftp()
 for file in local.rglob("*"):
     if not file.is_file() or "node_modules" in file.parts or "__pycache__" in file.parts or "test" in file.parts or file.suffix == ".pyc" or file.name.endswith(".py"):
         continue
-    if file.name in ("catalog.json", "catalog-published.json") or "catalog-media" in file.parts:
+    if file.name.startswith("catalog.json") or file.name.startswith("catalog-published.json") or "catalog-media" in file.parts:
         continue
     remote = remote_root + "/" + file.relative_to(local).as_posix()
     if file.name in ("users.json", "activity.json", "db-target.json") or file.name.startswith(".env"):
