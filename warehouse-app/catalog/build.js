@@ -1,6 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const T = require('./templates');
+const { isImageId } = require('./images');
+
+const SAFE_TAXONOMY_ID = /^[a-z0-9]{1,40}$/;
 
 const ASSETS = path.join(__dirname, 'assets');
 const LANGS = ['ar', 'en'];
@@ -15,16 +18,18 @@ function viewModel(catalog, products, availability, lang) {
   const list = [];
   for (const item of Object.values(catalog.items)) {
     if (!item.published) continue;
-    const product = products.get(Number(item.productId));
+    const pid = Number(item.productId);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    const product = products.get(pid);
     if (!product) continue;
     const nameAr = item.nameAr || product.name;
     const brand = brands.get(item.brandId);
     const section = sections.get(item.sectionId);
     const view = {
-      id: Number(item.productId),
+      id: pid,
       name: lang === 'en' ? (item.nameEn || nameAr) : nameAr,
       description: pick(item, lang, 'descriptionAr', 'descriptionEn'),
-      images: (item.images || []).slice(0, 5),
+      images: (item.images || []).filter(isImageId).slice(0, 5),
       brandId: brand ? brand.id : '',
       sectionId: section ? section.id : '',
       brandName: brand ? pick(brand, lang, 'nameAr', 'nameEn') : '',
@@ -35,7 +40,7 @@ function viewModel(catalog, products, availability, lang) {
     if (item.showPartNumber) view.partNumber = item.partNumber || product.code || '';
     if (item.showOrigin) view.origin = pick(item, lang, 'originAr', 'originEn');
     if (item.showFits) view.fits = pick(item, lang, 'fitsAr', 'fitsEn');
-    if (item.showAvailability) view.available = Boolean(availability.get(Number(item.productId)));
+    if (item.showAvailability) view.available = Boolean(availability.get(pid));
     list.push(view);
   }
   return list.sort((a, b) => a.name.localeCompare(b.name, lang));
@@ -44,6 +49,7 @@ function viewModel(catalog, products, availability, lang) {
 function taxonomy(entries, list, key, lang) {
   return entries.slice()
     .sort((a, b) => (a.order || 0) - (b.order || 0))
+    .filter((entry) => SAFE_TAXONOMY_ID.test(entry.id))
     .map((entry) => {
       const members = list.filter((p) => p[key] === entry.id);
       const withImage = members.find((p) => p.images.length);
@@ -63,15 +69,30 @@ function siteInfo(catalog, baseUrl, now) {
     address: { ar: c.addressAr || '', en: c.addressEn || c.addressAr || '' },
     about: { ar: c.aboutAr || T.LABELS.ar.tagline, en: c.aboutEn || T.LABELS.en.tagline },
     name: { ar: T.LABELS.ar.company, en: T.LABELS.en.company },
-    logo: c.logoId ? `/media/${c.logoId}-sm.webp` : '/assets/logo.png'
+    logo: isImageId(c.logoId) ? `/media/${c.logoId}-sm.webp` : '/assets/logo.png'
   };
 }
 
-function swapInto(temp, siteDir) {
+function swapInto(temp, siteDir, rename = fs.renameSync) {
   const old = `${siteDir}.old-${Date.now()}`;
-  if (fs.existsSync(siteDir)) fs.renameSync(siteDir, old);
-  fs.renameSync(temp, siteDir);
-  fs.rmSync(old, { recursive: true, force: true });
+  let movedOld = false;
+  if (fs.existsSync(siteDir)) {
+    rename(siteDir, old);
+    movedOld = true;
+  }
+  try {
+    rename(temp, siteDir);
+  } catch (error) {
+    if (movedOld) {
+      try {
+        rename(old, siteDir);
+      } catch {
+        // best effort restore
+      }
+    }
+    throw error;
+  }
+  if (movedOld) fs.rmSync(old, { recursive: true, force: true });
 }
 
 async function buildSite({ catalog, products, availability, mediaDir, siteDir, baseUrl, logoFallback, now = new Date() }) {
@@ -84,7 +105,7 @@ async function buildSite({ catalog, products, availability, mediaDir, siteDir, b
     fs.writeFileSync(file, content);
   };
   const urls = [];
-  const media = new Set(catalog.company.logoId ? [catalog.company.logoId] : []);
+  const media = new Set(isImageId(catalog.company.logoId) ? [catalog.company.logoId] : []);
   let total = 0;
   try {
     for (const lang of LANGS) {
@@ -137,4 +158,4 @@ async function buildSite({ catalog, products, availability, mediaDir, siteDir, b
   return { buildId: site.buildId, products: total, pages: urls.length };
 }
 
-module.exports = { buildSite, viewModel };
+module.exports = { buildSite, viewModel, swapInto };

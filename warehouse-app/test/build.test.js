@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { buildSite } = require('../catalog/build');
+const { buildSite, swapInto } = require('../catalog/build');
 const { emptyCatalog, defaultItem } = require('../catalog/store');
 
 const LOGO = path.join(__dirname, '..', 'public', 'logo.png');
@@ -79,4 +79,44 @@ test('rebuilding replaces the old site and leaves no temporary folders', async (
   assert.equal(fs.existsSync(path.join(s.siteDir, 'stale.txt')), false);
   assert.equal(fs.existsSync(path.join(s.siteDir, 'ar/p/1/index.html')), false);
   assert.deepEqual(fs.readdirSync(s.root).sort(), ['media', 'site']);
+});
+
+test('a failed swap keeps the old site', async () => {
+  const s = setup();
+  await buildSite({ ...s, baseUrl: 'https://c.test', logoFallback: LOGO });
+  fs.writeFileSync(path.join(s.siteDir, 'marker.txt'), 'keep');
+  const tempDir = fs.mkdtempSync(path.join(s.root, 'swap-temp-'));
+  const fakeRename = (from, to) => {
+    if (from === tempDir) throw new Error('swap failed');
+    fs.renameSync(from, to);
+  };
+  assert.throws(() => swapInto(tempDir, s.siteDir, fakeRename), /swap failed/);
+  assert.equal(fs.readFileSync(path.join(s.siteDir, 'marker.txt'), 'utf8'), 'keep');
+  assert.deepEqual(
+    fs.readdirSync(s.root).filter((name) => name.startsWith('site.old')),
+    []
+  );
+});
+
+test('unsafe ids from persisted data are ignored', async () => {
+  const s = setup();
+  s.catalog.brands.push({ id: '../evil', nameAr: 'evil', nameEn: 'evil', order: 99 });
+  s.catalog.items['1'].brandId = '../evil';
+  s.catalog.items['1'].images = ['../../x', 'aaaaaaaaaaaaaaaa'];
+  s.catalog.items['1/../2'] = {
+    ...defaultItem('1/../2'),
+    published: true,
+    nameAr: 'path traversal',
+    images: ['aaaaaaaaaaaaaaaa'],
+    brandId: 'b1',
+    sectionId: 's1'
+  };
+  await buildSite({ ...s, baseUrl: 'https://c.test', logoFallback: LOGO });
+  assert.deepEqual(fs.readdirSync(s.root).sort(), ['media', 'site']);
+  const siteFiles = allFiles(s.siteDir);
+  assert.ok(!siteFiles.some((f) => f.includes('evil')));
+  assert.equal(fs.existsSync(path.join(s.siteDir, 'ar/p/1/index.html')), true);
+  assert.equal(fs.existsSync(path.join(s.siteDir, 'ar/p/2/index.html')), true);
+  assert.deepEqual(fs.readdirSync(path.join(s.siteDir, 'ar/p')).sort(), ['1', '2']);
+  assert.match(fs.readFileSync(path.join(s.siteDir, 'ar/p/1/index.html'), 'utf8'), /مروحة/);
 });
