@@ -15,6 +15,7 @@ const icons = {
   branches: svg('<path d="M12 3v6"/><path d="M8 21h8"/><path d="M12 9a4 4 0 0 1 4 4v2H8v-2a4 4 0 0 1 4-4z"/><path d="M4 13h4M16 13h4"/>'),
   accounts: svg('<path d="M12 3l7 3v6c0 4.2-2.8 7.4-7 8.5C7.8 19.4 5 16.2 5 12V6l7-3z"/><path d="M9 12l2 2 4-4"/>'),
   activity: svg('<circle cx="12" cy="12" r="8"/><path d="M12 8v5l3 2"/>'),
+  catalog: svg('<path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4z"/><path d="M16.5 13v7M13 16.5h7"/>'),
   logout: svg('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>'),
   more: svg('<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>'),
   add: svg('<path d="M12 5v14M5 12h14"/>'),
@@ -40,6 +41,7 @@ const sections = [
   { id: 'suppliers', label: 'الموردين', title: 'الموردين', subtitle: 'اضغط المورد لعرض ملفه وفواتيره وحسابه' },
   { id: 'branches', label: 'الفروع', title: 'الفروع', subtitle: 'إضافة الفروع ونقل المخازن بينها' },
   { id: 'stores', label: 'المخازن', title: 'المخازن', subtitle: 'مخازن الشركة وربطها بالفروع' },
+  { id: 'catalog', label: 'الكتالوج', title: 'كتالوج الأصناف', subtitle: 'الأصناف المنشورة على catalog.alramzybrothers.com', perm: 'catalog' },
   { id: 'activity', label: 'سجل الحركات', title: 'سجل الحركات', subtitle: 'كل حساب واللي عمله: فواتير، أسعار، وبحث' },
   { id: 'accounts', label: 'إدارة الحسابات', title: 'إدارة الحسابات', subtitle: 'حسابات الدخول وصلاحيات المديرين', admin: true }
 ];
@@ -48,7 +50,9 @@ const state = { section: '', page: 1, q: '', storeId: '', dashStore: '', dashFro
 
 function visibleSections() {
   return sections.filter((section) =>
-    section.nav !== false && (!section.admin || state.user?.role === 'superadmin')
+    section.nav !== false
+    && (!section.admin || state.user?.role === 'superadmin')
+    && (!section.perm || canCatalog())
   );
 }
 
@@ -56,6 +60,7 @@ function canOpenSection(id) {
   const section = sections.find((item) => item.id === id);
   if (!section) return false;
   if (section.admin && state.user?.role !== 'superadmin') return false;
+  if (section.perm && !canCatalog()) return false;
   return true;
 }
 
@@ -474,6 +479,11 @@ async function openSection(id, options = {}) {
       const data = await api('/api/users');
       if (!ready()) return;
       return await renderAccounts(data);
+    }
+    if (id === 'catalog') {
+      const data = await api('/api/catalog');
+      if (!ready()) return;
+      return renderCatalog(data);
     }
     if (id === 'activity') {
       const data = await api(listUrl('/api/activity'));
@@ -1447,7 +1457,7 @@ async function openProductForm(id, options = {}) {
       <button id="closeDrawer" class="ghost" type="button">إغلاق</button>
     </header>
     <form id="productForm" class="form-grid${id && !editing ? ' form-view' : ''}">
-      ${id ? `<div class="wide history-row"><button id="saleHistory" class="history-btn" type="button">تاريخ البيع</button><button id="buyHistory" class="history-btn" type="button">تاريخ الشراء</button><button id="allMoves" class="history-btn" type="button">جميع الحركات</button></div>` : ''}
+      ${id ? `<div class="wide history-row"><button id="saleHistory" class="history-btn" type="button">تاريخ البيع</button><button id="buyHistory" class="history-btn" type="button">تاريخ الشراء</button><button id="allMoves" class="history-btn" type="button">جميع الحركات</button>${canCatalog() ? '<button id="catalogBtn" class="history-btn" type="button">كتالوج</button>' : ''}</div>` : ''}
       ${id ? `<div class="wide note"><strong>استعلامات السعر</strong>${inquiries.map((row) => `<div>${esc(row.name)} · ${whenText(row.at)}</div>`).join('') || '<div>لا يوجد</div>'}</div>` : ''}
       ${field('رقم الصنف', `<input value="${esc(id ? product.id : nextProductId)}" readonly>`)}
       ${field('الكود', `<input id="pCode" value="${esc(product.code)}" maxlength="50" placeholder="اختياري">`)}
@@ -1485,6 +1495,8 @@ async function openProductForm(id, options = {}) {
     document.getElementById('saleHistory').onclick = () => openProductHistory('sales', id, product);
     document.getElementById('buyHistory').onclick = () => openProductHistory('purchases', id, product);
     document.getElementById('allMoves').onclick = () => openProductMoves(id, product);
+    const catalogBtn = document.getElementById('catalogBtn');
+    if (catalogBtn) catalogBtn.onclick = () => openCatalogItem(id);
     opened.tab.fillToken += 1;
     const token = opened.tab.fillToken;
     fillProductHistory('sales', id, product, 1, token, key);
@@ -1788,6 +1800,7 @@ function openAccountForm(user, options = {}) {
       ${creating ? field('اسم الدخول', `<input id="aUser" maxlength="32" autocomplete="off" required>`) : field('اسم الدخول', `<input value="${esc(user.username)}" readonly>`)}
       ${field('الاسم', `<input id="aName" maxlength="60" value="${esc(user?.name || '')}" required>`, true)}
       ${field('الصلاحية', `<select id="aRole"><option value="manager" ${user?.role === 'superadmin' ? '' : 'selected'}>مدير</option><option value="superadmin" ${user?.role === 'superadmin' ? 'selected' : ''}>سوبر أدمن</option></select>`)}
+      ${field('صلاحيات إضافية', `<span class="checkline"><input id="aCatalog" type="checkbox" ${(user?.perms || []).includes('catalog') ? 'checked' : ''}> الكتالوج</span>`)}
       ${field(creating ? 'كلمة السر' : 'كلمة سر جديدة', `<input id="aPassword" type="password" minlength="8" autocomplete="new-password" ${creating ? 'required' : ''} placeholder="${creating ? '' : 'اتركها فارغة للإبقاء على الحالية'}">`)}
       ${creating ? '' : field('الحالة', `<span class="checkline"><input id="aActive" type="checkbox" ${user.active ? 'checked' : ''}> نشط</span>`)}
       <div class="wide actions">
@@ -1810,7 +1823,8 @@ function openAccountForm(user, options = {}) {
     const payload = {
       name: document.getElementById('aName').value.trim(),
       role: document.getElementById('aRole').value,
-      password: document.getElementById('aPassword').value
+      password: document.getElementById('aPassword').value,
+      perms: document.getElementById('aCatalog').checked ? ['catalog'] : []
     };
     if (creating) payload.username = document.getElementById('aUser').value.trim();
     else payload.active = document.getElementById('aActive').checked;
