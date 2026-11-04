@@ -115,6 +115,9 @@ test('unsafe ids from persisted data are ignored', async () => {
   assert.deepEqual(fs.readdirSync(s.root).sort(), ['media', 'site']);
   const siteFiles = allFiles(s.siteDir);
   assert.ok(!siteFiles.some((f) => f.includes('evil')));
+  const html = siteFiles.filter((f) => f.endsWith('.html')).map((f) => fs.readFileSync(f, 'utf8')).join('\n');
+  assert.doesNotMatch(html, /brand\/\.\./);
+  assert.doesNotMatch(html, /evil/);
   assert.equal(fs.existsSync(path.join(s.siteDir, 'ar/p/1/index.html')), true);
   assert.equal(fs.existsSync(path.join(s.siteDir, 'ar/p/2/index.html')), true);
   assert.deepEqual(fs.readdirSync(path.join(s.siteDir, 'ar/p')).sort(), ['1', '2']);

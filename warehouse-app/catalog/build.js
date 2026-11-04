@@ -12,9 +12,13 @@ function pick(entry, lang, ar, en) {
   return lang === 'en' ? (entry[en] || entry[ar] || '') : (entry[ar] || '');
 }
 
+function safeTaxonomyMap(entries) {
+  return new Map(entries.filter((entry) => SAFE_TAXONOMY_ID.test(entry.id)).map((entry) => [entry.id, entry]));
+}
+
 function viewModel(catalog, products, availability, lang) {
-  const brands = new Map(catalog.brands.map((entry) => [entry.id, entry]));
-  const sections = new Map(catalog.sections.map((entry) => [entry.id, entry]));
+  const brands = safeTaxonomyMap(catalog.brands);
+  const sections = safeTaxonomyMap(catalog.sections);
   const list = [];
   for (const item of Object.values(catalog.items)) {
     if (!item.published) continue;
