@@ -439,7 +439,7 @@ app.put('/api/users/:id', requireSuper, (req, res) => {
   const users = loadUsers();
   const index = users.findIndex((user) => user.id === req.params.id);
   if (index < 0) return res.status(404).json({ error: 'الحساب غير موجود' });
-  const next = { ...users[index], name: item.name, role: item.role, active: item.active, perms: item.perms };
+  const next = { ...users[index], name: item.name, role: item.role, active: item.active, perms: Object.prototype.hasOwnProperty.call(req.body || {}, 'perms') ? item.perms : users[index].perms };
   const supers = users.map((user, i) => (i === index ? next : user)).filter((user) => user.role === 'superadmin' && user.active);
   if (!supers.length) return res.status(400).json({ error: 'لازم يفضل سوبر أدمن واحد نشط على الأقل' });
   if (item.password) Object.assign(next, hashPassword(item.password));
