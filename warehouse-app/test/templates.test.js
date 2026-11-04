@@ -1,0 +1,49 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const T = require('../catalog/templates');
+
+const site = {
+  baseUrl: 'https://catalog.example', buildId: 'b1', year: 2026, whatsapp: '201001234567', phone: '0222',
+  address: { ar: 'القاهرة', en: 'Cairo' }, about: { ar: 'نبذة', en: 'About' },
+  name: { ar: 'الرمزي إخوان', en: 'Al Ramzy Brothers' }, logo: '/assets/logo.png'
+};
+
+const product = {
+  id: 7212, name: 'مروحة <أكتروس>', description: 'سطر 1\n\nسطر 2', images: ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb'],
+  brandId: 'b1', sectionId: 's1', brandName: 'أكتروس', sectionName: 'تبريد', featured: true, updatedAt: '',
+  partNumber: 'PN-1', available: true
+};
+
+test('productPage escapes text and shows only present fields', () => {
+  const html = T.productPage('ar', site, product, []);
+  assert.match(html, /<html lang="ar" dir="rtl">/);
+  assert.match(html, /مروحة &lt;أكتروس&gt;/);
+  assert.doesNotMatch(html, /مروحة <أكتروس>/);
+  assert.match(html, /PN-1/);
+  assert.match(html, /متوفر/);
+  assert.doesNotMatch(html, /المنشأ والماركة/);
+  assert.match(html, /data-thumb="1"/);
+  assert.match(html, /<p>سطر 1<\/p><p>سطر 2<\/p>/);
+  assert.match(html, /href="\/en\/p\/7212\/"/);
+});
+
+test('productPage omits hidden part number and availability', () => {
+  const { partNumber, available, ...hidden } = product;
+  const html = T.productPage('en', site, hidden, []);
+  assert.match(html, /dir="ltr"/);
+  assert.doesNotMatch(html, /PN-1/);
+  assert.doesNotMatch(html, /In stock|Out of stock/);
+  assert.match(html, /data-part=""/);
+});
+
+test('allPage renders filter controls and one card per product', () => {
+  const html = T.allPage('ar', site, { products: [product], brands: [{ id: 'b1', name: 'أكتروس', count: 1, image: '' }], sections: [] });
+  assert.match(html, /data-filters/);
+  assert.match(html, /<option value="b1">أكتروس<\/option>/);
+  assert.equal((html.match(/data-card /g) || []).length, 1);
+});
+
+test('homePage hides WhatsApp buttons when no number is set', () => {
+  const html = T.homePage('ar', { ...site, whatsapp: '' }, { brands: [], sections: [], featured: [], total: 0 });
+  assert.doesNotMatch(html, /wa\.me/);
+});
