@@ -1,4 +1,5 @@
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const T = require('./templates');
 const { isImageId } = require('./images');
@@ -96,17 +97,23 @@ function swapInto(temp, siteDir, rename = fs.renameSync) {
     }
     throw error;
   }
-  if (movedOld) fs.rmSync(old, { recursive: true, force: true });
+  if (movedOld) {
+    try {
+      fs.rmSync(old, { recursive: true, force: true });
+    } catch (error) {
+      console.error('catalog old site cleanup', error.message);
+    }
+  }
 }
 
 async function buildSite({ catalog, products, availability, mediaDir, siteDir, baseUrl, logoFallback, now = new Date() }) {
   const site = siteInfo(catalog, baseUrl, now);
   const temp = `${siteDir}.building-${site.buildId}`;
-  fs.rmSync(temp, { recursive: true, force: true });
-  const write = (rel, content) => {
+  await fsp.rm(temp, { recursive: true, force: true });
+  const write = async (rel, content) => {
     const file = path.join(temp, rel);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, content);
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    await fsp.writeFile(file, content);
   };
   const urls = [];
   const media = new Set(isImageId(catalog.company.logoId) ? [catalog.company.logoId] : []);
@@ -120,43 +127,47 @@ async function buildSite({ catalog, products, availability, mediaDir, siteDir, b
       const sections = taxonomy(catalog.sections, list, 'sectionId', lang);
       const featured = list.filter((p) => p.featured);
       const highlight = (featured.length ? featured : list.slice().sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))).slice(0, 8);
-      write(`${lang}/index.html`, T.homePage(lang, site, { brands, sections, featured: highlight, total: list.length }));
+      await write(`${lang}/index.html`, T.homePage(lang, site, { brands, sections, featured: highlight, total: list.length }));
       urls.push(`/${lang}/`);
-      write(`${lang}/products/index.html`, T.allPage(lang, site, { products: list, brands, sections }));
+      await write(`${lang}/products/index.html`, T.allPage(lang, site, { products: list, brands, sections }));
       urls.push(`/${lang}/products/`);
       for (const brand of brands) {
-        write(`${lang}/brand/${brand.id}/index.html`, T.listPage(lang, site, { title: brand.name, path: `/brand/${brand.id}/`, products: list.filter((p) => p.brandId === brand.id) }));
+        await write(`${lang}/brand/${brand.id}/index.html`, T.listPage(lang, site, { title: brand.name, path: `/brand/${brand.id}/`, products: list.filter((p) => p.brandId === brand.id) }));
         urls.push(`/${lang}/brand/${brand.id}/`);
       }
       for (const section of sections) {
-        write(`${lang}/section/${section.id}/index.html`, T.listPage(lang, site, { title: section.name, path: `/section/${section.id}/`, products: list.filter((p) => p.sectionId === section.id) }));
+        await write(`${lang}/section/${section.id}/index.html`, T.listPage(lang, site, { title: section.name, path: `/section/${section.id}/`, products: list.filter((p) => p.sectionId === section.id) }));
         urls.push(`/${lang}/section/${section.id}/`);
       }
       for (const p of list) {
         const similar = p.sectionId
           ? list.filter((x) => x.id !== p.id && x.sectionId === p.sectionId).slice(0, 8)
           : [];
-        write(`${lang}/p/${p.id}/index.html`, T.productPage(lang, site, p, similar));
+        await write(`${lang}/p/${p.id}/index.html`, T.productPage(lang, site, p, similar));
         urls.push(`/${lang}/p/${p.id}/`);
       }
     }
-    write('index.html', `<!doctype html><html lang="ar"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/ar/"><link rel="canonical" href="${baseUrl}/ar/"><title>${T.esc(site.name.ar)}</title></head><body><a href="/ar/">${T.esc(site.name.ar)}</a></body></html>`);
-    write('404.html', T.notFoundPage('ar', site));
-    write('robots.txt', `User-agent: *\nAllow: /\nSitemap: ${baseUrl}/sitemap.xml\n`);
-    write('sitemap.xml', `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `  <url><loc>${baseUrl}${u}</loc></url>`).join('\n')}\n</urlset>\n`);
-    fs.mkdirSync(path.join(temp, 'assets'), { recursive: true });
-    for (const name of fs.readdirSync(ASSETS)) fs.copyFileSync(path.join(ASSETS, name), path.join(temp, 'assets', name));
-    fs.copyFileSync(logoFallback, path.join(temp, 'assets', 'logo.png'));
-    fs.mkdirSync(path.join(temp, 'media'), { recursive: true });
+    await write('index.html', `<!doctype html><html lang="ar"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/ar/"><link rel="canonical" href="${baseUrl}/ar/"><title>${T.esc(site.name.ar)}</title></head><body><a href="/ar/">${T.esc(site.name.ar)}</a></body></html>`);
+    await write('404.html', T.notFoundPage('ar', site));
+    await write('robots.txt', `User-agent: *\nAllow: /\nSitemap: ${baseUrl}/sitemap.xml\n`);
+    await write('sitemap.xml', `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `  <url><loc>${baseUrl}${u}</loc></url>`).join('\n')}\n</urlset>\n`);
+    await fsp.mkdir(path.join(temp, 'assets'), { recursive: true });
+    for (const name of await fsp.readdir(ASSETS)) await fsp.copyFile(path.join(ASSETS, name), path.join(temp, 'assets', name));
+    await fsp.copyFile(logoFallback, path.join(temp, 'assets', 'logo.png'));
+    await fsp.mkdir(path.join(temp, 'media'), { recursive: true });
     for (const id of media) {
       for (const size of ['lg', 'sm']) {
         const from = path.join(mediaDir, `${id}-${size}.webp`);
-        if (fs.existsSync(from)) fs.copyFileSync(from, path.join(temp, 'media', `${id}-${size}.webp`));
+        try {
+          await fsp.copyFile(from, path.join(temp, 'media', `${id}-${size}.webp`));
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+        }
       }
     }
     swapInto(temp, siteDir);
   } catch (error) {
-    fs.rmSync(temp, { recursive: true, force: true });
+    await fsp.rm(temp, { recursive: true, force: true });
     throw error;
   }
   return { buildId: site.buildId, products: total, pages: urls.length };

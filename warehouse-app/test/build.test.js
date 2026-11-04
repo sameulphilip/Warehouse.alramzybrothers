@@ -123,3 +123,28 @@ test('unsafe ids from persisted data are ignored', async () => {
   assert.deepEqual(fs.readdirSync(path.join(s.siteDir, 'ar/p')).sort(), ['1', '2']);
   assert.match(fs.readFileSync(path.join(s.siteDir, 'ar/p/1/index.html'), 'utf8'), /مروحة/);
 });
+test('buildSite yields to the event loop while writing', async () => {
+  const s = setup();
+  let ticks = 0;
+  let active = true;
+  const pump = () => { if (active) { ticks += 1; setImmediate(pump); } };
+  setImmediate(pump);
+  await buildSite({ ...s, baseUrl: 'https://c.test', logoFallback: LOGO });
+  active = false;
+  assert.ok(ticks > 0, 'event loop must get turns during the build');
+});
+
+test('a cleanup failure after a successful swap is only logged', (t) => {
+  const s = setup();
+  const next = path.join(s.root, 'next');
+  fs.mkdirSync(next);
+  fs.writeFileSync(path.join(next, 'new.txt'), 'new');
+  fs.mkdirSync(s.siteDir);
+  fs.writeFileSync(path.join(s.siteDir, 'old.txt'), 'old');
+  const logged = [];
+  t.mock.method(console, 'error', (...args) => logged.push(args));
+  t.mock.method(fs, 'rmSync', () => { throw new Error('busy'); });
+  assert.doesNotThrow(() => swapInto(next, s.siteDir));
+  assert.equal(fs.readFileSync(path.join(s.siteDir, 'new.txt'), 'utf8'), 'new');
+  assert.equal(logged.length, 1);
+});
