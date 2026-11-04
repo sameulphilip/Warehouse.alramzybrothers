@@ -47,3 +47,45 @@ test('homePage hides WhatsApp buttons when no number is set', () => {
   const html = T.homePage('ar', { ...site, whatsapp: '' }, { brands: [], sections: [], featured: [], total: 0 });
   assert.doesNotMatch(html, /wa\.me/);
 });
+
+test('templates escape hostile ids and urls in attributes', () => {
+  const hostileSite = { ...site, baseUrl: 'https://c.test" onload="x' };
+  const hostileProduct = {
+    ...product,
+    id: '1" onfocus="alert(1)',
+    images: ['x" onerror="alert(1)'],
+    brandId: 'b" x="1',
+  };
+  for (const html of [
+    T.productPage('ar', hostileSite, hostileProduct, [hostileProduct]),
+    T.allPage('ar', hostileSite, {
+      products: [hostileProduct],
+      brands: [{ id: hostileProduct.brandId, name: 'B', count: 1, image: hostileProduct.images[0] }],
+      sections: [],
+    }),
+  ]) {
+    assert.doesNotMatch(html, /" onfocus="/);
+    assert.doesNotMatch(html, /" onerror="/);
+    assert.doesNotMatch(html, /" onload="/);
+    assert.doesNotMatch(html, /" x="1/);
+    assert.match(html, /&quot;/);
+  }
+});
+
+test('listPage and notFoundPage render escaped titles', () => {
+  const html = T.listPage('en', site, { title: '<b>Volvo</b>', path: '/brand/b1/', products: [product] });
+  assert.match(html, /&lt;b&gt;Volvo&lt;\/b&gt;/);
+  assert.match(html, /dir="ltr"/);
+  assert.equal((html.match(/data-card /g) || []).length, 1);
+
+  const nf = T.notFoundPage('ar', site);
+  assert.match(nf, /الصفحة مش موجودة/);
+  assert.match(nf, /href="\/ar\/"/);
+});
+
+test('productPage request drawer is an accessible dialog', () => {
+  const html = T.productPage('ar', site, product, []);
+  assert.match(html, /role="dialog"/);
+  assert.match(html, /aria-modal="true"/);
+  assert.match(html, /aria-label="إغلاق"/);
+});

@@ -133,6 +133,7 @@
   }
 
   let list = load();
+  let focusBeforeRequest = null;
 
   function draw() {
     const total = list.reduce((sum, entry) => sum + entry.qty, 0);
@@ -149,13 +150,20 @@
   }
 
   function open() {
+    focusBeforeRequest = doc.activeElement;
     panel.hidden = false;
     doc.documentElement.classList.add('locked');
+    const closeBtn = panel.querySelector('[data-close-request]');
+    if (closeBtn) closeBtn.focus();
   }
 
   function close() {
     panel.hidden = true;
     doc.documentElement.classList.remove('locked');
+    if (focusBeforeRequest && typeof focusBeforeRequest.focus === 'function' && doc.contains(focusBeforeRequest)) {
+      focusBeforeRequest.focus();
+    }
+    focusBeforeRequest = null;
   }
 
   doc.querySelectorAll('[data-ask]').forEach((link) => {

@@ -7,7 +7,7 @@ const LABELS = {
     added: 'اتضاف لقائمة الطلب', similar: 'أصناف من نفس القسم', request: 'قائمة الطلب',
     send: 'ابعت الطلب على واتساب', empty: 'القائمة فاضية', qty: 'الكمية', remove: 'حذف',
     noResults: 'مفيش أصناف مطابقة', products: 'صنف', call: 'اتصل بنا', address: 'العنوان',
-    notFound: 'الصفحة مش موجودة', backHome: 'رجوع للرئيسية', company: 'الرمزي إخوان',
+    notFound: 'الصفحة مش موجودة', backHome: 'رجوع للرئيسية', close: 'إغلاق', company: 'الرمزي إخوان',
     tagline: 'تجارة واستيراد قطع غيار النقل الثقيل'
   },
   en: {
@@ -18,7 +18,7 @@ const LABELS = {
     added: 'Added to request list', similar: 'More from this category', request: 'Request list',
     send: 'Send request on WhatsApp', empty: 'Your list is empty', qty: 'Qty', remove: 'Remove',
     noResults: 'No matching products', products: 'products', call: 'Call us', address: 'Address',
-    notFound: 'Page not found', backHome: 'Back to home', company: 'Al Ramzy Brothers',
+    notFound: 'Page not found', backHome: 'Back to home', close: 'Close', company: 'Al Ramzy Brothers',
     tagline: 'Heavy truck spare parts — trading and import'
   }
 };
@@ -47,20 +47,20 @@ function badge(lang, p) {
 
 function card(lang, p) {
   const image = p.images[0]
-    ? `<img src="/media/${p.images[0]}-sm.webp" alt="${esc(p.name)}" loading="lazy" width="480" height="480">`
+    ? `<img src="/media/${esc(p.images[0])}-sm.webp" alt="${esc(p.name)}" loading="lazy" width="480" height="480">`
     : noImage();
-  return `<a class="card" href="/${lang}/p/${p.id}/" data-card data-name="${esc(p.name)}" data-part="${esc(p.partNumber || '')}" data-brand="${esc(p.brandId)}" data-section="${esc(p.sectionId)}"><span class="card-media">${image}</span><span class="card-body"><strong>${esc(p.name)}</strong>${p.brandName ? `<small>${esc(p.brandName)}</small>` : ''}${badge(lang, p)}</span></a>`;
+  return `<a class="card" href="/${lang}/p/${esc(p.id)}/" data-card data-name="${esc(p.name)}" data-part="${esc(p.partNumber || '')}" data-brand="${esc(p.brandId)}" data-section="${esc(p.sectionId)}"><span class="card-media">${image}</span><span class="card-body"><strong>${esc(p.name)}</strong>${p.brandName ? `<small>${esc(p.brandName)}</small>` : ''}${badge(lang, p)}</span></a>`;
 }
 
 function tiles(lang, list, kind) {
   const L = LABELS[lang];
-  return list.map((t) => `<a class="tile" href="/${lang}/${kind}/${t.id}/"><span class="media">${t.image ? `<img src="/media/${t.image}-sm.webp" alt="" loading="lazy">` : noImage()}</span><strong>${esc(t.name)}</strong><small>${t.count} ${L.products}</small></a>`).join('');
+  return list.map((t) => `<a class="tile" href="/${lang}/${kind}/${esc(t.id)}/"><span class="media">${t.image ? `<img src="/media/${esc(t.image)}-sm.webp" alt="" loading="lazy">` : noImage()}</span><strong>${esc(t.name)}</strong><small>${t.count} ${L.products}</small></a>`).join('');
 }
 
 function footer(lang, site) {
   const L = LABELS[lang];
   const items = [];
-  if (site.whatsapp) items.push(`<a href="https://wa.me/${site.whatsapp}" target="_blank" rel="noopener"><small>WhatsApp</small><strong dir="ltr">+${esc(site.whatsapp)}</strong></a>`);
+  if (site.whatsapp) items.push(`<a href="https://wa.me/${esc(site.whatsapp)}" target="_blank" rel="noopener"><small>WhatsApp</small><strong dir="ltr">+${esc(site.whatsapp)}</strong></a>`);
   if (site.phone) items.push(`<a href="tel:${esc(site.phone.replace(/[^\d+]/g, ''))}"><small>${L.call}</small><strong dir="ltr">${esc(site.phone)}</strong></a>`);
   if (site.address[lang]) items.push(`<div><small>${L.address}</small><strong>${esc(site.address[lang])}</strong></div>`);
   const contact = items.length ? `<div class="wrap section"><h2>${L.contact}</h2><div class="contact-grid">${items.join('')}</div></div>` : '';
@@ -70,10 +70,10 @@ function footer(lang, site) {
 function layout(lang, site, page) {
   const L = LABELS[lang];
   const other = lang === 'ar' ? 'en' : 'ar';
-  const url = `${site.baseUrl}/${lang}${page.path}`;
+  const url = esc(`${site.baseUrl}/${lang}${page.path}`);
   const title = page.title ? `${page.title} | ${site.name[lang]}` : site.name[lang];
   const description = page.description || site.about[lang];
-  const image = page.image ? `${site.baseUrl}/media/${page.image}-lg.webp` : `${site.baseUrl}/assets/logo.png`;
+  const image = esc(page.image ? `${site.baseUrl}/media/${page.image}-lg.webp` : `${site.baseUrl}/assets/logo.png`);
   const labels = JSON.stringify({ added: L.added, empty: L.empty, qty: L.qty, remove: L.remove, partNumber: L.partNumber }).replace(/</g, '\\u003c');
   return `<!doctype html>
 <html lang="${lang}" dir="${L.dir}">
@@ -83,8 +83,8 @@ function layout(lang, site, page) {
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">
 <link rel="canonical" href="${url}">
-<link rel="alternate" hreflang="ar" href="${site.baseUrl}/ar${page.path}">
-<link rel="alternate" hreflang="en" href="${site.baseUrl}/en${page.path}">
+<link rel="alternate" hreflang="ar" href="${esc(`${site.baseUrl}/ar${page.path}`)}">
+<link rel="alternate" hreflang="en" href="${esc(`${site.baseUrl}/en${page.path}`)}">
 <meta property="og:type" content="${page.type || 'website'}">
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(description)}">
@@ -95,30 +95,30 @@ function layout(lang, site, page) {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/assets/catalog.css?v=${site.buildId}">
+<link rel="stylesheet" href="/assets/catalog.css?v=${esc(site.buildId)}">
 </head>
 <body data-lang="${lang}" data-wa="${esc(site.whatsapp)}">
 <header class="top"><div class="wrap top-row">
-<a class="brand" href="/${lang}/"><img src="${site.logo}" alt="${esc(site.name[lang])}" width="44" height="44"><span>${esc(site.name[lang])}</span></a>
-<nav class="top-nav"><a href="/${lang}/products/">${L.all}</a><a href="/${other}${page.path}" hreflang="${other}" lang="${other}">${L.otherLabel}</a><button type="button" class="request-btn" data-open-request aria-label="${L.request}">${ICON_LIST}<span data-request-count hidden>0</span></button></nav>
+<a class="brand" href="/${lang}/"><img src="${esc(site.logo)}" alt="${esc(site.name[lang])}" width="44" height="44"><span>${esc(site.name[lang])}</span></a>
+<nav class="top-nav"><a href="/${lang}/products/">${L.all}</a><a href="/${other}${esc(page.path)}" hreflang="${other}" lang="${other}">${L.otherLabel}</a><button type="button" class="request-btn" data-open-request aria-label="${L.request}">${ICON_LIST}<span data-request-count hidden>0</span></button></nav>
 </div></header>
 <main>${page.body}</main>
 ${footer(lang, site)}
-<aside id="request" class="request" hidden aria-label="${L.request}"><div class="request-card">
-<header><h2>${L.request}</h2><button type="button" data-close-request aria-label="×">×</button></header>
+<aside id="request" class="request" hidden role="dialog" aria-modal="true" aria-labelledby="request-title" aria-label="${L.request}"><div class="request-card">
+<header><h2 id="request-title">${L.request}</h2><button type="button" data-close-request aria-label="${L.close}">×</button></header>
 <ul data-request-rows></ul>
 <a class="btn wa" data-request-send target="_blank" rel="noopener" hidden>${ICON_WA}${L.send}</a>
 </div></aside>
 <dialog id="zoom"><img alt=""></dialog>
 <script type="application/json" id="labels">${labels}</script>
-<script src="/assets/catalog.js?v=${site.buildId}" defer></script>
+<script src="/assets/catalog.js?v=${esc(site.buildId)}" defer></script>
 </body>
 </html>`;
 }
 
 function homePage(lang, site, model) {
   const L = LABELS[lang];
-  const wa = site.whatsapp ? `<a class="btn wa" href="https://wa.me/${site.whatsapp}" target="_blank" rel="noopener">${ICON_WA}${L.contact}</a>` : '';
+  const wa = site.whatsapp ? `<a class="btn wa" href="https://wa.me/${esc(site.whatsapp)}" target="_blank" rel="noopener">${ICON_WA}${L.contact}</a>` : '';
   const block = (title, inner, link) => `<section class="section"><div class="wrap"><div class="section-head"><h2>${title}</h2>${link || ''}</div>${inner}</div></section>`;
   const body = `<section class="hero"><div class="wrap"><h1>${esc(site.name[lang])}</h1><p>${esc(site.about[lang])}</p><div class="hero-actions"><a class="btn light" href="/${lang}/products/">${L.all}</a>${wa}</div></div></section>
 ${model.brands.length ? block(L.brands, `<div class="tiles">${tiles(lang, model.brands, 'brand')}</div>`) : ''}
@@ -146,26 +146,26 @@ function listPage(lang, site, model) {
 
 function productPage(lang, site, p, similar) {
   const L = LABELS[lang];
-  const url = `${site.baseUrl}/${lang}/p/${p.id}/`;
+  const url = esc(`${site.baseUrl}/${lang}/p/${p.id}/`);
   const slides = p.images.length
-    ? p.images.map((id, i) => `<button type="button" data-zoom="/media/${id}-lg.webp" aria-label="${esc(p.name)} ${i + 1}"><img src="/media/${id}-lg.webp" alt="${esc(p.name)}" width="1600" height="1600"${i ? ' loading="lazy"' : ''}></button>`).join('')
+    ? p.images.map((id, i) => `<button type="button" data-zoom="/media/${esc(id)}-lg.webp" aria-label="${esc(p.name)} ${i + 1}"><img src="/media/${esc(id)}-lg.webp" alt="${esc(p.name)}" width="1600" height="1600"${i ? ' loading="lazy"' : ''}></button>`).join('')
     : noImage();
   const thumbs = p.images.length > 1
-    ? `<div class="thumbs">${p.images.map((id, i) => `<button type="button" data-thumb="${i}" class="${i ? '' : 'on'}" aria-label="${i + 1}"><img src="/media/${id}-sm.webp" alt="" loading="lazy"></button>`).join('')}</div>`
+    ? `<div class="thumbs">${p.images.map((id, i) => `<button type="button" data-thumb="${i}" class="${i ? '' : 'on'}" aria-label="${i + 1}"><img src="/media/${esc(id)}-sm.webp" alt="" loading="lazy"></button>`).join('')}</div>`
     : '';
   const specs = [[L.partNumber, p.partNumber], [L.origin, p.origin], [L.fits, p.fits]].filter(([, value]) => value);
   const crumbs = [`<a href="/${lang}/">${L.home}</a>`, `<a href="/${lang}/products/">${L.all}</a>`];
-  if (p.brandName) crumbs.push(`<a href="/${lang}/brand/${p.brandId}/">${esc(p.brandName)}</a>`);
+  if (p.brandName) crumbs.push(`<a href="/${lang}/brand/${esc(p.brandId)}/">${esc(p.brandName)}</a>`);
   const ask = site.whatsapp
-    ? `<a class="btn wa" data-ask data-name="${esc(p.name)}" data-part="${esc(p.partNumber || '')}" data-url="${url}" href="https://wa.me/${site.whatsapp}" target="_blank" rel="noopener">${ICON_WA}${L.ask}</a>`
+    ? `<a class="btn wa" data-ask data-name="${esc(p.name)}" data-part="${esc(p.partNumber || '')}" data-url="${url}" href="https://wa.me/${esc(site.whatsapp)}" target="_blank" rel="noopener">${ICON_WA}${L.ask}</a>`
     : '';
   const body = `<div class="wrap"><nav class="crumbs page-crumbs">${crumbs.join('<span>›</span>')}</nav>
 <div class="product"><div class="gallery"><div class="gallery-track" data-track>${slides}</div>${thumbs}</div>
 <div class="info"><h1>${esc(p.name)}</h1>
-<div class="chips">${p.brandName ? `<a href="/${lang}/brand/${p.brandId}/">${esc(p.brandName)}</a>` : ''}${p.sectionName ? `<a href="/${lang}/section/${p.sectionId}/">${esc(p.sectionName)}</a>` : ''}${badge(lang, p)}</div>
+<div class="chips">${p.brandName ? `<a href="/${lang}/brand/${esc(p.brandId)}/">${esc(p.brandName)}</a>` : ''}${p.sectionName ? `<a href="/${lang}/section/${esc(p.sectionId)}/">${esc(p.sectionName)}</a>` : ''}${badge(lang, p)}</div>
 ${specs.length ? `<dl class="specs">${specs.map(([key, value]) => `<dt>${key}</dt><dd>${esc(value)}</dd>`).join('')}</dl>` : ''}
 ${p.description ? `<div class="desc">${paragraphs(p.description)}</div>` : ''}
-<div class="actions">${ask}<button type="button" class="btn outline" data-add data-id="${p.id}" data-name="${esc(p.name)}" data-part="${esc(p.partNumber || '')}">${L.add}</button></div>
+<div class="actions">${ask}<button type="button" class="btn outline" data-add data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-part="${esc(p.partNumber || '')}">${L.add}</button></div>
 </div></div>
 ${similar.length ? `<section class="section"><h2>${L.similar}</h2><div class="grid">${similar.map((s) => card(lang, s)).join('')}</div></section>` : ''}</div>`;
   return layout(lang, site, {
