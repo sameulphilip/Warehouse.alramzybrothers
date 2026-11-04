@@ -143,3 +143,10 @@ test('sheet cards without specs or part number still render cleanly', () => {
   assert.doesNotMatch(html, /<bdi dir="ltr"><\/bdi>/);
   assert.doesNotMatch(html, /class="spec-list"/);
 });
+
+test('homePage hero shows the company logo', () => {
+  const html = T.homePage('ar', site, { brands: [], sections: [], featured: [], total: 0 });
+  const hero = html.slice(html.indexOf('<section class="hero">'), html.indexOf('</section>'));
+  assert.match(hero, /<div class="hero-logo"><img src="[^"]+"/);
+  assert.ok(hero.includes(`src="${site.logo}"`));
+});

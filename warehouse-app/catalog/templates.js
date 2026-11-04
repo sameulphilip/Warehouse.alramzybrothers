@@ -161,7 +161,7 @@ function homePage(lang, site, model) {
   const L = LABELS[lang];
   const wa = site.whatsapp ? `<a class="btn wa" href="https://wa.me/${esc(site.whatsapp)}" target="_blank" rel="noopener">${ICON_WA}${L.contact}</a>` : '';
   const block = (title, inner, link) => `<section class="section"><div class="wrap"><div class="section-head"><h2>${title}</h2>${link || ''}</div>${inner}</div></section>`;
-  const body = `<section class="hero"><div class="wrap"><h1>${esc(site.name[lang])}</h1><p>${esc(site.about[lang])}</p><div class="hero-actions"><a class="btn light" href="/${lang}/products/">${L.all}</a>${wa}</div></div></section>
+  const body = `<section class="hero"><div class="wrap hero-grid"><div class="hero-text"><h1>${esc(site.name[lang])}</h1><p>${esc(site.about[lang])}</p><div class="hero-actions"><a class="btn light" href="/${lang}/products/">${L.all}</a>${wa}</div></div><div class="hero-logo"><img src="${esc(site.logo)}" alt="${esc(site.name[lang])}" width="240" height="240"></div></div></section>
 ${model.brands.length ? block(L.brands, `<div class="tiles">${tiles(lang, model.brands, 'brand')}</div>`) : ''}
 ${model.sections.length ? block(L.sections, `<div class="tiles">${tiles(lang, model.sections, 'section')}</div>`) : ''}
 ${model.featured.length ? block(L.featured, `<div class="grid">${model.featured.map((p) => card(lang, p)).join('')}</div>`, `<a href="/${lang}/products/">${L.all} (${model.total})</a>`) : ''}`;
