@@ -15,15 +15,20 @@ function setup(availability) {
   });
   const builds = [];
   const state = { availability: new Map(availability) };
+  const hooks = { onBuild: null };
   const publisher = createPublisher({
     store,
     snapshotFile: path.join(dir, 'catalog-published.json'),
     mediaDir: dir, siteDir: path.join(dir, 'site'), baseUrl: 'https://c.test', logoFallback: 'logo.png',
     loadProducts: async (ids) => new Map(ids.map((id) => [id, { name: `p${id}`, code: '' }])),
     loadAvailability: async (ids) => new Map(ids.map((id) => [id, Boolean(state.availability.get(id))])),
-    build: async (args) => { builds.push(args); return { buildId: 'x', products: 1, pages: 3 }; }
+    build: async (args) => {
+      builds.push(args);
+      if (hooks.onBuild) await hooks.onBuild(args);
+      return { buildId: 'x', products: 1, pages: 3 };
+    }
   });
-  return { dir, store, builds, state, publisher };
+  return { dir, store, builds, state, hooks, publisher };
 }
 
 test('publish builds only published ids and records the publish time', async () => {
@@ -64,4 +69,39 @@ test('a failed publish stores the error and rethrows', async () => {
   });
   await assert.rejects(failing.publish(), /boom/);
   assert.equal(s.store.load().lastError, 'boom');
+});
+
+test('publish during a refresh waits and then publishes the latest catalog', async () => {
+  const s = setup([[1, true]]);
+  await s.publisher.publish();
+  s.state.availability.set(1, false);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let entered;
+  const enteredBuild = new Promise((resolve) => { entered = resolve; });
+  s.hooks.onBuild = async () => { entered(); await gate; };
+  const refresh = s.publisher.refreshAvailability();
+  await enteredBuild;
+  s.hooks.onBuild = null;
+  s.store.update((data) => { data.items['1'].nameAr = 'جديد'; });
+  const p1 = s.publisher.publish();
+  const p2 = s.publisher.publish();
+  release();
+  const [r1, r2] = await Promise.all([p1, p2]);
+  assert.equal(await refresh, true);
+  assert.equal(r1, r2);
+  assert.equal(s.builds.length, 3);
+  assert.equal(s.builds[2].catalog.items['1'].nameAr, 'جديد');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(s.dir, 'catalog-published.json'), 'utf8')).items['1'].nameAr, 'جديد');
+});
+
+test('publish writes the snapshot before building', async () => {
+  const s = setup([[1, true]]);
+  let seen = null;
+  s.hooks.onBuild = async () => {
+    seen = JSON.parse(fs.readFileSync(path.join(s.dir, 'catalog-published.json'), 'utf8'));
+  };
+  await s.publisher.publish();
+  assert.ok(seen);
+  assert.equal(seen.items['1'].nameAr, 'منشور');
 });

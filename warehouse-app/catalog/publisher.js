@@ -12,6 +12,8 @@ function signature(map) {
 
 function createPublisher({ store, snapshotFile, mediaDir, siteDir, baseUrl, logoFallback, loadProducts, loadAvailability, build = buildSite }) {
   let running = null;
+  let runningIsPublish = false;
+  let pendingPublish = null;
   let lastSignature = null;
 
   function readSnapshot() {
@@ -32,10 +34,10 @@ function createPublisher({ store, snapshotFile, mediaDir, siteDir, baseUrl, logo
   async function run(catalog, fromSnapshot) {
     const ids = publishedIds(catalog);
     const [products, availability] = await Promise.all([loadProducts(ids), loadAvailability(ids)]);
+    if (!fromSnapshot) writeSnapshot(catalog);
     const result = await build({ catalog, products, availability, mediaDir, siteDir, baseUrl, logoFallback });
     lastSignature = signature(availability);
     if (fromSnapshot) return { ...result, publishedAt: store.load().publishedAt };
-    writeSnapshot(catalog);
     const publishedAt = new Date().toISOString();
     store.update((data) => {
       data.publishedAt = publishedAt;
@@ -45,6 +47,7 @@ function createPublisher({ store, snapshotFile, mediaDir, siteDir, baseUrl, logo
   }
 
   function start(catalog, fromSnapshot) {
+    runningIsPublish = !fromSnapshot;
     running = run(catalog, fromSnapshot)
       .catch((error) => {
         store.update((data) => { data.lastError = error.message || 'تعذر نشر الكتالوج'; });
@@ -55,17 +58,27 @@ function createPublisher({ store, snapshotFile, mediaDir, siteDir, baseUrl, logo
   }
 
   function publish() {
-    if (running) return running;
-    return start(store.load(), false);
+    if (pendingPublish) return pendingPublish;
+    if (!running) return start(store.load(), false);
+    if (runningIsPublish) return running;
+    const waiting = running;
+    const next = (async () => {
+      try { await waiting; } catch (error) { /* refresh failure must not block the publish */ }
+      return start(store.load(), false);
+    })();
+    pendingPublish = next;
+    const clear = () => { if (pendingPublish === next) pendingPublish = null; };
+    next.then(clear, clear);
+    return next;
   }
 
   async function refreshAvailability() {
-    if (running) return false;
+    if (running || pendingPublish) return false;
     const snapshot = readSnapshot();
     if (!snapshot || !store.load().publishedAt) return false;
     const availability = await loadAvailability(publishedIds(snapshot));
     if (lastSignature !== null && signature(availability) === lastSignature) return false;
-    if (running) return false;
+    if (running || pendingPublish) return false;
     await start(snapshot, true);
     return true;
   }
