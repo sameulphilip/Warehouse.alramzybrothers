@@ -253,6 +253,18 @@ function currentUser(req) {
   return user;
 }
 
+function freshUser(req) {
+  const user = currentUser(req);
+  if (!user || !user.id) return null;
+  try {
+    const found = loadUsers().find((entry) => entry.id === user.id);
+    if (!found || !found.active) return null;
+    return publicUser(found);
+  } catch (error) {
+    return null;
+  }
+}
+
 function requireAuth(req, res, next) {
   if (currentUser(req)) return next();
   return res.status(401).json({ error: 'unauthorized' });
@@ -308,7 +320,8 @@ function requireSuper(req, res, next) {
 function requireCatalog(req, res, next) {
   const user = currentUser(req);
   if (!user) return res.status(401).json({ error: 'unauthorized' });
-  if (!canEditCatalog(user)) return res.status(403).json({ error: 'الكتالوج محتاج صلاحية «كتالوج»' });
+  const fresh = freshUser(req);
+  if (!fresh || !canEditCatalog(fresh)) return res.status(403).json({ error: 'الكتالوج محتاج صلاحية «كتالوج»' });
   return next();
 }
 
@@ -367,7 +380,15 @@ async function queryPage(sqlText, inputs) {
 }
 
 app.get('/api/me', (req, res) => {
-  res.json({ user: currentUser(req), readOnly: readTarget() === 'standby' });
+  let user = currentUser(req);
+  if (user) {
+    const fresh = freshUser(req);
+    if (fresh) {
+      req.session.user = fresh;
+      user = fresh;
+    }
+  }
+  res.json({ user, readOnly: readTarget() === 'standby' });
 });
 
 app.post('/api/login', (req, res) => {
