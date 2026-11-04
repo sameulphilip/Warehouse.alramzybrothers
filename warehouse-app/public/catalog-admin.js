@@ -262,8 +262,6 @@ function renderCatalog(data) {
   const catLogo = root.querySelector('#catLogo');
   const catPublish = root.querySelector('#catPublish');
   if (readOnly) {
-    catQ.disabled = true;
-    catFilter.disabled = true;
     companyForm.querySelectorAll('input, textarea').forEach((el) => { el.disabled = true; });
   }
 
