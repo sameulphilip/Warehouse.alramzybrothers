@@ -4,6 +4,10 @@ const sql = require('mssql');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { createStore: createCatalogStore } = require('./catalog/store');
+const { createPublisher: createCatalogPublisher } = require('./catalog/publisher');
+const { createCatalogRouter } = require('./catalog/routes');
+const { cleanPerms, canEditCatalog } = require('./catalog/access');
 
 function loadEnv(file) {
   try {
@@ -238,7 +242,8 @@ function publicUser(user) {
     username: user.username,
     name: user.name,
     role: user.role,
-    active: Boolean(user.active)
+    active: Boolean(user.active),
+    perms: cleanPerms(user.perms)
   };
 }
 
@@ -300,19 +305,27 @@ function requireSuper(req, res, next) {
   return next();
 }
 
+function requireCatalog(req, res, next) {
+  const user = currentUser(req);
+  if (!user) return res.status(401).json({ error: 'unauthorized' });
+  if (!canEditCatalog(user)) return res.status(403).json({ error: 'الكتالوج محتاج صلاحية «كتالوج»' });
+  return next();
+}
+
 function cleanAccount(body, { creating }) {
   const username = String(body.username || '').trim().toLowerCase();
   const name = String(body.name || '').trim();
   const role = body.role === 'superadmin' ? 'superadmin' : 'manager';
   const password = String(body.password || '');
   const active = body.active !== false;
+  const perms = cleanPerms(body.perms);
   if (creating && !/^[a-z0-9._-]{3,32}$/.test(username)) {
     return { error: 'اسم الدخول من 3 إلى 32 حرفاً إنجليزياً أو رقماً' };
   }
   if (name.length < 2 || name.length > 60) return { error: 'اكتب اسم الحساب' };
   if (creating && password.length < 8) return { error: 'كلمة السر لازم تكون 8 أحرف على الأقل' };
   if (!creating && password && password.length < 8) return { error: 'كلمة السر لازم تكون 8 أحرف على الأقل' };
-  return { value: { username, name, role, password, active } };
+  return { value: { username, name, role, password, active, perms } };
 }
 
 function paging(req) {
@@ -389,6 +402,7 @@ app.post('/api/users', requireSuper, (req, res) => {
     name: item.name,
     role: item.role,
     active: true,
+    perms: item.perms,
     ...hashPassword(item.password)
   };
   users.push(created);
@@ -404,7 +418,7 @@ app.put('/api/users/:id', requireSuper, (req, res) => {
   const users = loadUsers();
   const index = users.findIndex((user) => user.id === req.params.id);
   if (index < 0) return res.status(404).json({ error: 'الحساب غير موجود' });
-  const next = { ...users[index], name: item.name, role: item.role, active: item.active };
+  const next = { ...users[index], name: item.name, role: item.role, active: item.active, perms: item.perms };
   const supers = users.map((user, i) => (i === index ? next : user)).filter((user) => user.role === 'superadmin' && user.active);
   if (!supers.length) return res.status(400).json({ error: 'لازم يفضل سوبر أدمن واحد نشط على الأقل' });
   if (item.password) Object.assign(next, hashPassword(item.password));
@@ -5418,6 +5432,60 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
   }
 });
 
+async function catalogProducts(ids) {
+  const map = new Map();
+  const clean = [...new Set(ids.map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+  for (let i = 0; i < clean.length; i += 500) {
+    const rows = await runQuery(`
+      SELECT ProductId AS id, ISNULL(ProductCode, '') AS code, ISNULL(ProductName, N'') AS name
+      FROM tblProducts WHERE ProductId IN (${clean.slice(i, i + 500).join(',')})
+    `);
+    for (const row of rows) map.set(Number(row.id), { name: row.name, code: row.code });
+  }
+  return map;
+}
+
+async function catalogAvailability(ids) {
+  const map = new Map();
+  const clean = [...new Set(ids.map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+  for (let i = 0; i < clean.length; i += 500) {
+    const rows = await runQuery(`
+      SELECT ProductID AS id, SUM(ISNULL(ProductStock, 0)) AS qty
+      FROM tblProductsStores WHERE CompCode = 0 AND ProductID IN (${clean.slice(i, i + 500).join(',')})
+      GROUP BY ProductID
+    `);
+    for (const row of rows) map.set(Number(row.id), Number(row.qty) > 0);
+  }
+  return map;
+}
+
+const catalogStore = createCatalogStore(path.join(__dirname, 'data', 'catalog.json'));
+const catalogMediaDir = path.join(__dirname, 'data', 'catalog-media');
+const catalogPublisher = createCatalogPublisher({
+  store: catalogStore,
+  snapshotFile: path.join(__dirname, 'data', 'catalog-published.json'),
+  mediaDir: catalogMediaDir,
+  siteDir: process.env.CATALOG_SITE_DIR || '/var/www/catalog.alramzybrothers.com/site',
+  baseUrl: process.env.CATALOG_BASE_URL || 'https://catalog.alramzybrothers.com',
+  logoFallback: path.join(__dirname, 'public', 'logo.png'),
+  loadProducts: catalogProducts,
+  loadAvailability: catalogAvailability
+});
+app.use(createCatalogRouter({
+  store: catalogStore,
+  mediaDir: catalogMediaDir,
+  publisher: catalogPublisher,
+  loadProducts: catalogProducts,
+  requireCatalog,
+  actorName,
+  record: recordActivity,
+  siteUrl: process.env.CATALOG_BASE_URL || 'https://catalog.alramzybrothers.com'
+}));
+
 app.listen(PORT, '127.0.0.1', () => {
   console.log(`warehouse listening on 127.0.0.1:${PORT}`);
+  setInterval(() => {
+    if (readTarget() === 'standby') return;
+    catalogPublisher.refreshAvailability().catch((error) => console.error('catalog refresh', error.message));
+  }, 15 * 60 * 1000);
 });
