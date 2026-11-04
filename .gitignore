@@ -17,3 +17,6 @@ ramzy-mobile/.gradle/
 ramzy-mobile/build/
 ramzy-mobile/app/build/
 release/
+warehouse-app/data/catalog.json
+warehouse-app/data/catalog-published.json
+warehouse-app/data/catalog-media/
