@@ -748,6 +748,8 @@ main > .panel-note { margin: 8px 2px 12px; padding: 0; color: var(--muted); font
 .cat-thumb img { width: 100%; aspect-ratio: 1; object-fit: cover; }
 .cat-thumb figcaption { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px; font-size: 0.8rem; }
 .cat-thumb figcaption button { flex: 1 1 auto; min-height: 32px; margin: 0; padding: 0 8px; font-size: 0.78rem; }
+.cat-thumb figcaption button.cat-move { flex: 0 0 auto; min-width: 2.25rem; padding: 0 6px; font-size: 0.9rem; }
+.cat-row-readonly { grid-template-columns: 1fr 1fr; }
 .cat-upload { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 16px; border: 1.5px solid #1b2559; border-radius: 12px; color: #1b2559; font-weight: 700; cursor: pointer; }
 .cat-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .cat-head-actions { display: flex; flex-wrap: wrap; gap: 8px; }
