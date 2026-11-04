@@ -16,7 +16,14 @@ function createCatalogRouter({ store, mediaDir, publisher, loadProducts, require
     try {
       await handler(req, res);
     } catch (error) {
-      res.status(error.status || 400).json({ error: error.message || 'تعذر تنفيذ الطلب' });
+      if (error.status) {
+        res.status(error.status).json({ error: error.message || 'تعذر تنفيذ الطلب' });
+      } else if (/[\u0600-\u06FF]/.test(String(error.message || ''))) {
+        res.status(400).json({ error: error.message });
+      } else {
+        console.error('catalog', error);
+        res.status(500).json({ error: 'تعذر تنفيذ الطلب' });
+      }
     }
   };
   const productIdOf = (req) => {
@@ -91,8 +98,14 @@ function createCatalogRouter({ store, mediaDir, publisher, loadProducts, require
       delete catalog.items[String(id)];
       return item;
     });
-    if (removed) removed.images.forEach((imageId) => deleteImage(imageId, mediaDir));
     record(req, { action: 'catalog', detail: `إزالة صنف ${id} من الكتالوج`, ref: `product:${id}` });
+    if (removed) {
+      try {
+        removed.images.forEach((imageId) => deleteImage(imageId, mediaDir));
+      } catch (error) {
+        console.error('catalog media cleanup', error);
+      }
+    }
     res.json({ ok: true });
   }));
 
@@ -130,8 +143,12 @@ function createCatalogRouter({ store, mediaDir, publisher, loadProducts, require
       entry.images = entry.images.filter((x) => x !== imageId);
       return entry;
     });
-    deleteImage(imageId, mediaDir);
     record(req, { action: 'catalog', detail: `حذف صورة من كتالوج صنف ${id}`, ref: `product:${id}` });
+    try {
+      deleteImage(imageId, mediaDir);
+    } catch (error) {
+      console.error('catalog media cleanup', error);
+    }
     res.json({ item });
   }));
 
@@ -158,11 +175,17 @@ function createCatalogRouter({ store, mediaDir, publisher, loadProducts, require
   router.post('/api/catalog/company/logo', raw, wrap(async (req, res) => {
     const imageId = await saveImage(req.body, mediaDir);
     let previous = '';
-    const company = store.update((catalog) => {
-      previous = catalog.company.logoId;
-      catalog.company.logoId = imageId;
-      return catalog.company;
-    });
+    let company;
+    try {
+      company = store.update((catalog) => {
+        previous = catalog.company.logoId;
+        catalog.company.logoId = imageId;
+        return catalog.company;
+      });
+    } catch (error) {
+      deleteImage(imageId, mediaDir);
+      throw error;
+    }
     if (previous) deleteImage(previous, mediaDir);
     record(req, { action: 'catalog', detail: 'تغيير شعار الكتالوج' });
     res.json({ company });

@@ -8,9 +8,9 @@ const sharp = require('sharp');
 const { createStore } = require('../catalog/store');
 const { createCatalogRouter } = require('../catalog/routes');
 
-async function start() {
+async function start(overrides = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-routes-'));
-  const store = createStore(path.join(dir, 'catalog.json'));
+  const store = overrides.store || createStore(path.join(dir, 'catalog.json'));
   const mediaDir = path.join(dir, 'media');
   const records = [];
   const app = express();
@@ -19,7 +19,7 @@ async function start() {
     store,
     mediaDir,
     publisher: { publish: async () => ({ buildId: 'b', products: 1, pages: 9, publishedAt: '2026-11-04T10:00:00.000Z' }) },
-    loadProducts: async (ids) => new Map(ids.filter((id) => id === 7212).map((id) => [id, { name: 'انبوبه', code: '70.3' }])),
+    loadProducts: overrides.loadProducts || (async (ids) => new Map(ids.filter((id) => id === 7212).map((id) => [id, { name: 'انبوبه', code: '70.3' }]))),
     requireCatalog: (req, res, next) => (req.get('x-deny') ? res.status(403).json({ error: 'ممنوع' }) : next()),
     actorName: () => 'سامح',
     record: (req, entry) => records.push(entry),
@@ -117,4 +117,54 @@ test('catalog routes enforce the image limit, image type and permission', async 
   assert.equal(r.status, 400);
   r = await s.call('GET', '/api/catalog', undefined, { 'x-deny': '1' });
   assert.equal(r.status, 403);
+});
+
+test('unexpected errors return a generic Arabic 500', async (t) => {
+  const prevError = console.error;
+  console.error = () => {};
+  t.after(() => { console.error = prevError; });
+
+  const s = await start({
+    loadProducts: async () => { throw new Error('Connection lost to SQL server'); }
+  });
+  t.after(() => s.server.close());
+
+  let r = await s.call('GET', '/api/catalog/items/7212');
+  assert.equal(r.status, 500);
+  assert.equal(r.body.error, 'تعذر تنفيذ الطلب');
+  assert.doesNotMatch(JSON.stringify(r.body), /SQL/i);
+
+  r = await s.call('PUT', '/api/catalog/taxonomy/colors', { list: [] });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /نوع/);
+});
+
+test('a failed logo save removes the uploaded image', async (t) => {
+  const prevError = console.error;
+  console.error = () => {};
+  t.after(() => { console.error = prevError; });
+
+  const baseStore = createStore(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cat-logo-')), 'catalog.json'));
+  let failNextUpdate = false;
+  const store = {
+    load: (...args) => baseStore.load(...args),
+    update(fn) {
+      if (failNextUpdate) {
+        failNextUpdate = false;
+        throw new Error('disk full');
+      }
+      return baseStore.update(fn);
+    }
+  };
+  const s = await start({ store });
+  t.after(() => s.server.close());
+
+  failNextUpdate = true;
+  const r = await s.call('POST', '/api/catalog/company/logo', await png(), { 'Content-Type': 'image/png' });
+  assert.equal(r.status, 500);
+  assert.equal(r.body.error, 'تعذر تنفيذ الطلب');
+  const webps = fs.existsSync(s.mediaDir)
+    ? fs.readdirSync(s.mediaDir).filter((file) => file.endsWith('.webp'))
+    : [];
+  assert.equal(webps.length, 0);
 });
