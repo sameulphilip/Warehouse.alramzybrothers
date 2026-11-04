@@ -4,7 +4,7 @@ function canCatalog() {
 }
 
 function catalogMedia(id) {
-  return `/api/catalog/media/${id}-sm.webp`;
+  return `/api/catalog/media/${esc(id)}-sm.webp`;
 }
 
 async function catalogUploadImage(url, file) {
@@ -102,10 +102,10 @@ function drawCatalogItem(key, productId, data) {
   const imagesEl = root.querySelector('#cImages');
   const imageCaption = (id, index) => {
     if (readOnly) return index === 0 ? '<span>الرئيسية</span>' : '';
-    const main = index === 0 ? '<span>الرئيسية</span>' : `<button type="button" class="ghost" data-main="${id}">اجعلها الرئيسية</button>`;
+    const main = index === 0 ? '<span>الرئيسية</span>' : `<button type="button" class="ghost" data-main="${esc(id)}">اجعلها الرئيسية</button>`;
     const earlier = index > 0 ? `<button type="button" class="ghost cat-move" data-earlier="${index}" aria-label="قدّم">←</button>` : '';
     const later = index < images.length - 1 ? `<button type="button" class="ghost cat-move" data-later="${index}" aria-label="أخّر">→</button>` : '';
-    return `${main}${earlier}${later}<button type="button" class="ghost" data-del="${id}">حذف</button>`;
+    return `${main}${earlier}${later}<button type="button" class="ghost" data-del="${esc(id)}">حذف</button>`;
   };
   const drawImages = () => {
     imagesEl.innerHTML = images.map((id, index) => `<figure class="cat-thumb${index === 0 ? ' main' : ''}"><img src="${catalogMedia(id)}" alt=""><figcaption>${imageCaption(id, index)}</figcaption></figure>`).join('') || '<p class="note">لا توجد صور</p>';
