@@ -89,3 +89,13 @@ test('productPage request drawer is an accessible dialog', () => {
   assert.match(html, /aria-modal="true"/);
   assert.match(html, /aria-label="إغلاق"/);
 });
+test('notFoundPage is noindex and has no canonical or hreflang links', () => {
+  const nf = T.notFoundPage('ar', site);
+  assert.match(nf, /<meta name="robots" content="noindex">/);
+  assert.doesNotMatch(nf, /rel="canonical"/);
+  assert.doesNotMatch(nf, /hreflang="(ar|en)" href=/);
+  assert.doesNotMatch(nf, /property="og:url"/);
+  const home = T.homePage('ar', site, { brands: [], sections: [], featured: [], total: 0 });
+  assert.match(home, /rel="canonical"/);
+  assert.doesNotMatch(home, /name="robots"/);
+});

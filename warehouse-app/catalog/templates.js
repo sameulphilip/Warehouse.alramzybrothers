@@ -82,15 +82,15 @@ function layout(lang, site, page) {
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${url}">
+${page.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canonical" href="${url}">
 <link rel="alternate" hreflang="ar" href="${esc(`${site.baseUrl}/ar${page.path}`)}">
-<link rel="alternate" hreflang="en" href="${esc(`${site.baseUrl}/en${page.path}`)}">
+<link rel="alternate" hreflang="en" href="${esc(`${site.baseUrl}/en${page.path}`)}">`}
 <meta property="og:type" content="${page.type || 'website'}">
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(description)}">
 <meta property="og:image" content="${image}">
-<meta property="og:url" content="${url}">
-<meta name="theme-color" content="#1b2559">
+${page.noindex ? '' : `<meta property="og:url" content="${url}">
+`}<meta name="theme-color" content="#1b2559">
 <link rel="icon" href="/assets/logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -177,7 +177,7 @@ ${similar.length ? `<section class="section"><h2>${L.similar}</h2><div class="gr
 function notFoundPage(lang, site) {
   const L = LABELS[lang];
   const body = `<div class="wrap empty-note"><h1>${L.notFound}</h1><p><a class="btn" href="/${lang}/">${L.backHome}</a></p></div>`;
-  return layout(lang, site, { path: '/', title: L.notFound, body });
+  return layout(lang, site, { path: '/', title: L.notFound, body, noindex: true });
 }
 
 module.exports = { LABELS, esc, homePage, allPage, listPage, productPage, notFoundPage };
