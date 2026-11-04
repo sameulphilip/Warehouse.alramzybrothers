@@ -137,6 +137,15 @@ test('unexpected errors return a generic Arabic 500', async (t) => {
   r = await s.call('PUT', '/api/catalog/taxonomy/colors', { list: [] });
   assert.equal(r.status, 400);
   assert.match(r.body.error, /نوع/);
+
+  const sDigits = await start({
+    loadProducts: async () => { throw new Error('٣٤٥ ؟ ٪'); }
+  });
+  t.after(() => sDigits.server.close());
+
+  r = await sDigits.call('GET', '/api/catalog/items/7212');
+  assert.equal(r.status, 500);
+  assert.equal(r.body.error, 'تعذر تنفيذ الطلب');
 });
 
 test('a failed logo save removes the uploaded image', async (t) => {
@@ -196,20 +205,28 @@ test('deletes succeed and are audited even when media cleanup fails', async (t) 
   const imageId = r.body.item.images[0];
   blockMediaCleanup(s.mediaDir, imageId);
 
+  const beforeImageDelete = s.records.length;
   r = await s.call('DELETE', `/api/catalog/items/7212/images/${imageId}`);
   assert.equal(r.status, 200);
   assert.deepEqual(r.body.item.images, []);
+  assert.equal(s.records.length, beforeImageDelete + 1);
   assert.equal(s.records.at(-1).action, 'catalog');
+  assert.match(s.records.at(-1).detail, /حذف صورة/);
+  assert.equal(s.records.at(-1).ref, 'product:7212');
 
   await s.call('PUT', '/api/catalog/items/7212', { nameAr: 'y' });
   r = await s.call('POST', '/api/catalog/items/7212/images', await png(), { 'Content-Type': 'image/png' });
   const secondId = r.body.item.images[0];
   blockMediaCleanup(s.mediaDir, secondId);
 
+  const beforeItemDelete = s.records.length;
   r = await s.call('DELETE', '/api/catalog/items/7212');
   assert.equal(r.status, 200);
   assert.equal(s.store.load().items['7212'], undefined);
+  assert.equal(s.records.length, beforeItemDelete + 1);
   assert.equal(s.records.at(-1).action, 'catalog');
+  assert.match(s.records.at(-1).detail, /إزالة/);
+  assert.equal(s.records.at(-1).ref, 'product:7212');
 });
 
 test('replacing the logo is audited even when old logo cleanup fails', async (t) => {
@@ -224,8 +241,10 @@ test('replacing the logo is audited even when old logo cleanup fails', async (t)
   const firstLogo = r.body.company.logoId;
   blockMediaCleanup(s.mediaDir, firstLogo);
 
+  const beforeLogoReplace = s.records.length;
   r = await s.call('POST', '/api/catalog/company/logo', await png(), { 'Content-Type': 'image/png' });
   assert.equal(r.status, 200);
   assert.notEqual(r.body.company.logoId, firstLogo);
+  assert.equal(s.records.length, beforeLogoReplace + 1);
   assert.match(s.records.at(-1).detail, /شعار/);
 });
