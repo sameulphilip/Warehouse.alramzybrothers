@@ -99,3 +99,47 @@ test('notFoundPage is noindex and has no canonical or hreflang links', () => {
   assert.match(home, /rel="canonical"/);
   assert.doesNotMatch(home, /name="robots"/);
 });
+
+const specProduct = {
+  ...product,
+  specs: [
+    { label: 'OEM', values: ['003 420 7718', '002 420 5218'] },
+    { label: 'DIA', values: ['41.27 <mm>'] },
+    { label: '', values: ['WITHOUT PRESSURE PIN'] }
+  ]
+};
+
+test('listPage renders technical sheet cards with grouped specs and a print button', () => {
+  const html = T.listPage('ar', site, { title: 'أكتروس', path: '/brand/b1/', products: [specProduct] });
+  assert.equal((html.match(/class="sheet-card"/g) || []).length, 1);
+  assert.match(html, /class="sheet-code"[^>]*>[^<]*الكود/);
+  assert.match(html, /<bdi dir="ltr">PN-1<\/bdi>/);
+  assert.match(html, /<dt>OEM<\/dt><dd><span dir="ltr">003 420 7718<\/span><span dir="ltr">002 420 5218<\/span><\/dd>/);
+  assert.match(html, /41\.27 &lt;mm&gt;/);
+  assert.match(html, /WITHOUT PRESSURE PIN/);
+  assert.match(html, /data-print/);
+  assert.match(html, /\u0637\u0628\u0627\u0639\u0629 \u0627\u0644\u0643\u062a\u0627\u0644\u0648\u062c/);
+  assert.match(html, /class="print-head"/);
+  assert.match(html, /data-card /);
+});
+
+test('allPage uses sheet cards and keeps filter data on each card', () => {
+  const html = T.allPage('en', site, { products: [specProduct], brands: [], sections: [] });
+  assert.match(html, /<article class="sheet-card" data-card data-name="[^"]+" data-part="PN-1" data-brand="b1" data-section="s1"/);
+  assert.match(html, /Print catalog/);
+});
+
+test('productPage shows a full technical table with the code bar', () => {
+  const html = T.productPage('en', site, specProduct, []);
+  assert.match(html, /class="spec-table"/);
+  assert.match(html, /<th scope="row">OEM<\/th><td><span dir="ltr">003 420 7718<\/span><span dir="ltr">002 420 5218<\/span><\/td>/);
+  assert.match(html, /class="sheet-bar"/);
+  assert.match(html, /IBM\+Plex\+Mono/);
+});
+
+test('sheet cards without specs or part number still render cleanly', () => {
+  const { partNumber, specs, ...bare } = specProduct;
+  const html = T.listPage('en', site, { title: 'x', path: '/section/s1/', products: [bare] });
+  assert.doesNotMatch(html, /<bdi dir="ltr"><\/bdi>/);
+  assert.doesNotMatch(html, /class="spec-list"/);
+});

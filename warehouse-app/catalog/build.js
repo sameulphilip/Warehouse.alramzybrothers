@@ -3,6 +3,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const T = require('./templates');
 const { isImageId } = require('./images');
+const { parseSpecs } = require('./specs');
 
 const SAFE_TAXONOMY_ID = /^[a-z0-9]{1,40}$/;
 
@@ -40,7 +41,8 @@ function viewModel(catalog, products, availability, lang) {
       brandName: brand ? pick(brand, lang, 'nameAr', 'nameEn') : '',
       sectionName: section ? pick(section, lang, 'nameAr', 'nameEn') : '',
       featured: Boolean(item.featured),
-      updatedAt: item.updatedAt || ''
+      updatedAt: item.updatedAt || '',
+      specs: parseSpecs(item.specs)
     };
     if (item.showPartNumber) view.partNumber = item.partNumber || product.code || '';
     if (item.showOrigin) view.origin = pick(item, lang, 'originAr', 'originEn');

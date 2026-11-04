@@ -82,3 +82,11 @@ test('cleanCompany keeps the logo id and normalizes the WhatsApp number', () => 
   assert.equal(company.whatsapp, '201001234567');
   assert.equal(company.aboutAr, 'نبذة');
 });
+
+test('cleanItem keeps technical specs text and caps it', () => {
+  const catalog = emptyCatalog();
+  const item = cleanItem(catalog, 7, { specs: '  OEM: 003 420 7718\r\nDIA: 41.27 mm  ' }, 'a');
+  assert.equal(item.specs, 'OEM: 003 420 7718\nDIA: 41.27 mm');
+  assert.equal(cleanItem(catalog, 7, { specs: 'x'.repeat(5000) }, 'a').specs.length, 2000);
+  assert.equal(defaultItem(7).specs, '');
+});

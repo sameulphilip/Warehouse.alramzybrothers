@@ -58,6 +58,7 @@ function defaultItem(productId) {
     fitsEn: '',
     showFits: true,
     showAvailability: true,
+    specs: '',
     updatedAt: null,
     updatedBy: ''
   };
@@ -101,6 +102,7 @@ function cleanItem(catalog, productId, input, actor, now = new Date()) {
     fitsEn: text(body.fitsEn, 300),
     showFits: flag(body.showFits),
     showAvailability: flag(body.showAvailability),
+    specs: text(body.specs, 2000),
     updatedAt: now.toISOString(),
     updatedBy: text(actor, 60)
   };

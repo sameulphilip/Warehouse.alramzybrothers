@@ -8,7 +8,8 @@ const LABELS = {
     send: 'ابعت الطلب على واتساب', empty: 'القائمة فاضية', qty: 'الكمية', remove: 'حذف',
     noResults: 'مفيش أصناف مطابقة', products: 'صنف', call: 'اتصل بنا', address: 'العنوان',
     notFound: 'الصفحة مش موجودة', backHome: 'رجوع للرئيسية', close: 'إغلاق', company: 'الرمزي إخوان',
-    tagline: 'تجارة واستيراد قطع غيار النقل الثقيل'
+    tagline: 'تجارة واستيراد قطع غيار النقل الثقيل', code: 'الكود', specs: 'المواصفات الفنية',
+    details: 'التفاصيل', print: 'طباعة الكتالوج'
   },
   en: {
     dir: 'ltr', otherLabel: 'العربية', home: 'Home', all: 'All products', brands: 'Brands', sections: 'Categories',
@@ -19,11 +20,13 @@ const LABELS = {
     send: 'Send request on WhatsApp', empty: 'Your list is empty', qty: 'Qty', remove: 'Remove',
     noResults: 'No matching products', products: 'products', call: 'Call us', address: 'Address',
     notFound: 'Page not found', backHome: 'Back to home', close: 'Close', company: 'Al Ramzy Brothers',
-    tagline: 'Heavy truck spare parts — trading and import'
+    tagline: 'Heavy truck spare parts — trading and import', code: 'Code', specs: 'Technical specifications',
+    details: 'Details', print: 'Print catalog'
   }
 };
 
 const ICON_LIST = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5h10M9 12h10M9 19h10"/><path d="M4 5h.01M4 12h.01M4 19h.01"/></svg>';
+const ICON_PRINT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" width="20" height="20"><path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/></svg>';
 const ICON_WA = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" width="20" height="20"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8-.2-.1-.4-.1-.6.1l-.8 1c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.3-.4.2-.4.7-1.3.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.7 11.8 11.8 0 0 0 4.5 4c1.7.7 2.3.8 3.2.7.5-.1 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.1-.3-.2-.5-.3z"/></svg>';
 
 function esc(value) {
@@ -50,6 +53,44 @@ function card(lang, p) {
     ? `<img src="/media/${esc(p.images[0])}-sm.webp" alt="${esc(p.name)}" loading="lazy" width="480" height="480">`
     : noImage();
   return `<a class="card" href="/${lang}/p/${esc(p.id)}/" data-card data-name="${esc(p.name)}" data-part="${esc(p.partNumber || '')}" data-brand="${esc(p.brandId)}" data-section="${esc(p.sectionId)}"><span class="card-media">${image}</span><span class="card-body"><strong>${esc(p.name)}</strong>${p.brandName ? `<small>${esc(p.brandName)}</small>` : ''}${badge(lang, p)}</span></a>`;
+}
+
+function specValues(values) {
+  return values.map((value) => `<span dir="ltr">${esc(value)}</span>`).join('');
+}
+
+function codeLabel(lang, p, fallback) {
+  return p.partNumber ? `${LABELS[lang].code}: <bdi dir="ltr">${esc(p.partNumber)}</bdi>` : esc(fallback || '');
+}
+
+function sheetCard(lang, p) {
+  const L = LABELS[lang];
+  const href = `/${lang}/p/${esc(p.id)}/`;
+  const image = p.images[0]
+    ? `<img src="/media/${esc(p.images[0])}-sm.webp" alt="${esc(p.name)}" loading="lazy" width="480" height="480">`
+    : noImage();
+  const groups = (p.specs || []).slice(0, 6);
+  const rows = groups.filter((g) => g.label).map((g) => `<dt>${esc(g.label)}</dt><dd>${specValues(g.values)}</dd>`).join('')
+    + (p.origin ? `<dt>${L.origin}</dt><dd>${esc(p.origin)}</dd>` : '');
+  const notes = groups.filter((g) => !g.label).map((g) => `<p class="spec-note">${specValues(g.values)}</p>`).join('');
+  return `<article class="sheet-card" data-card data-name="${esc(p.name)}" data-part="${esc(p.partNumber || '')}" data-brand="${esc(p.brandId)}" data-section="${esc(p.sectionId)}">
+<header class="sheet-bar"><span class="sheet-code">${codeLabel(lang, p, p.sectionName)}</span><span>${esc(p.brandName || '')}</span></header>
+<div class="sheet-body"><a class="sheet-media" href="${href}" tabindex="-1" aria-hidden="true">${image}</a>
+<div class="sheet-info"><h3><a href="${href}">${esc(p.name)}</a></h3>${rows ? `<dl class="spec-list">${rows}</dl>` : ''}${notes}<div class="sheet-foot">${badge(lang, p)}<a class="sheet-link" href="${href}">${L.details}</a></div></div></div>
+</article>`;
+}
+
+function printHead(lang, site, title) {
+  return `<div class="print-head"><img src="${esc(site.logo)}" alt="" width="56" height="56"><div><strong>${esc(site.name[lang])}</strong><span>${esc(title)}</span></div></div>`;
+}
+
+function printFoot(lang, site) {
+  const parts = [site.whatsapp ? `WhatsApp +${esc(site.whatsapp)}` : '', site.phone ? esc(site.phone) : '', esc(site.address[lang] || '')].filter(Boolean);
+  return parts.length ? `<p class="print-foot">${parts.join(' · ')}</p>` : '';
+}
+
+function printButton(lang) {
+  return `<button type="button" class="btn outline print-btn" data-print>${ICON_PRINT}${LABELS[lang].print}</button>`;
 }
 
 function tiles(lang, list, kind) {
@@ -94,7 +135,7 @@ ${page.noindex ? '' : `<meta property="og:url" content="${url}">
 <link rel="icon" href="/assets/logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/assets/catalog.css?v=${esc(site.buildId)}">
 </head>
 <body data-lang="${lang}" data-wa="${esc(site.whatsapp)}">
@@ -130,17 +171,17 @@ ${model.featured.length ? block(L.featured, `<div class="grid">${model.featured.
 function allPage(lang, site, model) {
   const L = LABELS[lang];
   const options = (list, all) => `<option value="">${all}</option>${list.map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}`;
-  const body = `<div class="wrap"><header class="page-head"><nav class="crumbs"><a href="/${lang}/">${L.home}</a><span>›</span><span>${L.all}</span></nav><h1>${L.all}</h1><p>${model.products.length} ${L.products}</p></header>
+  const body = `<div class="wrap">${printHead(lang, site, L.all)}<header class="page-head"><nav class="crumbs"><a href="/${lang}/">${L.home}</a><span>›</span><span>${L.all}</span></nav><div class="page-title"><div><h1>${L.all}</h1><p>${model.products.length} ${L.products}</p></div>${printButton(lang)}</div></header>
 <form class="filters" data-filters role="search"><input type="search" name="q" placeholder="${L.search}" aria-label="${L.search}">${model.brands.length ? `<select name="brand" aria-label="${L.brands}">${options(model.brands, L.allBrands)}</select>` : ''}${model.sections.length ? `<select name="section" aria-label="${L.sections}">${options(model.sections, L.allSections)}</select>` : ''}</form>
-<div class="grid section" data-results>${model.products.map((p) => card(lang, p)).join('')}</div>
-<p class="empty-note" data-no-results hidden>${L.noResults}</p></div>`;
+<div class="sheet-grid section" data-results>${model.products.map((p) => sheetCard(lang, p)).join('')}</div>
+<p class="empty-note" data-no-results hidden>${L.noResults}</p>${printFoot(lang, site)}</div>`;
   return layout(lang, site, { path: '/products/', title: L.all, body });
 }
 
 function listPage(lang, site, model) {
   const L = LABELS[lang];
-  const body = `<div class="wrap"><header class="page-head"><nav class="crumbs"><a href="/${lang}/">${L.home}</a><span>›</span><span>${esc(model.title)}</span></nav><h1>${esc(model.title)}</h1><p>${model.products.length} ${L.products}</p></header>
-<div class="grid section">${model.products.map((p) => card(lang, p)).join('')}</div></div>`;
+  const body = `<div class="wrap">${printHead(lang, site, model.title)}<header class="page-head"><nav class="crumbs"><a href="/${lang}/">${L.home}</a><span>›</span><span>${esc(model.title)}</span></nav><div class="page-title"><div><h1>${esc(model.title)}</h1><p>${model.products.length} ${L.products}</p></div>${printButton(lang)}</div></header>
+<div class="sheet-grid section">${model.products.map((p) => sheetCard(lang, p)).join('')}</div>${printFoot(lang, site)}</div>`;
   return layout(lang, site, { path: model.path, title: model.title, body });
 }
 
@@ -153,7 +194,15 @@ function productPage(lang, site, p, similar) {
   const thumbs = p.images.length > 1
     ? `<div class="thumbs">${p.images.map((id, i) => `<button type="button" data-thumb="${i}" class="${i ? '' : 'on'}" aria-label="${i + 1}"><img src="/media/${esc(id)}-sm.webp" alt="" loading="lazy"></button>`).join('')}</div>`
     : '';
-  const specs = [[L.partNumber, p.partNumber], [L.origin, p.origin], [L.fits, p.fits]].filter(([, value]) => value);
+  const row = (label, cell) => `<tr><th scope="row">${label}</th><td>${cell}</td></tr>`;
+  const groups = p.specs || [];
+  const rows = [
+    p.partNumber ? row(L.partNumber, specValues([p.partNumber])) : '',
+    ...groups.filter((g) => g.label).map((g) => row(esc(g.label), specValues(g.values))),
+    p.origin ? row(L.origin, esc(p.origin)) : '',
+    p.fits ? row(L.fits, esc(p.fits)) : '',
+    ...groups.filter((g) => !g.label).map((g) => `<tr><td colspan="2" class="spec-note">${specValues(g.values)}</td></tr>`)
+  ].join('');
   const crumbs = [`<a href="/${lang}/">${L.home}</a>`, `<a href="/${lang}/products/">${L.all}</a>`];
   if (p.brandName) crumbs.push(`<a href="/${lang}/brand/${esc(p.brandId)}/">${esc(p.brandName)}</a>`);
   const ask = site.whatsapp
@@ -161,9 +210,10 @@ function productPage(lang, site, p, similar) {
     : '';
   const body = `<div class="wrap"><nav class="crumbs page-crumbs">${crumbs.join('<span>›</span>')}</nav>
 <div class="product"><div class="gallery"><div class="gallery-track" data-track>${slides}</div>${thumbs}</div>
-<div class="info"><h1>${esc(p.name)}</h1>
+<div class="info"><div class="sheet-bar"><span class="sheet-code">${codeLabel(lang, p, p.brandName)}</span><span>${esc(p.sectionName || '')}</span></div>
+<h1>${esc(p.name)}</h1>
 <div class="chips">${p.brandName ? `<a href="/${lang}/brand/${esc(p.brandId)}/">${esc(p.brandName)}</a>` : ''}${p.sectionName ? `<a href="/${lang}/section/${esc(p.sectionId)}/">${esc(p.sectionName)}</a>` : ''}${badge(lang, p)}</div>
-${specs.length ? `<dl class="specs">${specs.map(([key, value]) => `<dt>${key}</dt><dd>${esc(value)}</dd>`).join('')}</dl>` : ''}
+${rows ? `<table class="spec-table"><caption>${L.specs}</caption><tbody>${rows}</tbody></table>` : ''}
 ${p.description ? `<div class="desc">${paragraphs(p.description)}</div>` : ''}
 <div class="actions">${ask}<button type="button" class="btn outline" data-add data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-part="${esc(p.partNumber || '')}">${L.add}</button></div>
 </div></div>

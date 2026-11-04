@@ -83,6 +83,7 @@ function drawCatalogItem(key, productId, data) {
       ${field('بيركب على (إنجليزي)', `<input id="cFitsEn" maxlength="300" dir="ltr" value="${esc(item.fitsEn)}">`, true)}
       ${field('إظهار بيركب على', catalogCheck('cShowFits', item.showFits, 'يظهر للعميل'))}
       ${field('التوفر', catalogCheck('cShowAvail', item.showAvailability, 'إظهار علامة متوفر / غير متوفر'))}
+      ${field('المواصفات الفنية', `<textarea id="cSpecs" rows="7" maxlength="2000" dir="ltr" placeholder="OEM: 003 420 7718&#10;OEM: 002 420 5218&#10;FTE: R 4192B1&#10;DIA: 41.27 mm&#10;WITHOUT PRESSURE PIN">${esc(item.specs || '')}</textarea><small>سطر لكل معلومة بالشكل «التسمية: القيمة». الأرقام اللي ليها نفس التسمية بتتجمّع تحت بعض. السطر من غير «:» بيظهر كملاحظة.</small>`, true)}
       <div class="wide"><strong>الصور</strong> <small>لحد 5 صور (JPG أو PNG أو WebP، لحد 8 ميجا). الأولى هي الرئيسية.</small>
         <div id="cImages" class="cat-images"></div>
         ${readOnly ? '' : '<label class="cat-upload">إضافة صور<input id="cUpload" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden></label>'}
@@ -197,7 +198,7 @@ function drawCatalogItem(key, productId, data) {
             partNumber: value('cPart'), showPartNumber: checked('cShowPart'),
             originAr: value('cOriginAr'), originEn: value('cOriginEn'), showOrigin: checked('cShowOrigin'),
             fitsAr: value('cFitsAr'), fitsEn: value('cFitsEn'), showFits: checked('cShowFits'),
-            showAvailability: checked('cShowAvail'), images
+            showAvailability: checked('cShowAvail'), specs: value('cSpecs'), images
           })
         });
         if (!root.isConnected) return;

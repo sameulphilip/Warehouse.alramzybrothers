@@ -174,8 +174,12 @@
   doc.addEventListener('click', (event) => {
     if (event.target === panel) return close();
     if (event.target === zoom) return zoom.close();
-    const target = event.target.closest('[data-add],[data-open-request],[data-close-request],[data-remove],[data-thumb],[data-zoom]');
+    const target = event.target.closest('[data-add],[data-open-request],[data-close-request],[data-remove],[data-thumb],[data-zoom],[data-print]');
     if (!target) return;
+    if (target.matches('[data-print]')) {
+      root.print();
+      return;
+    }
     if (target.matches('[data-add]')) {
       list = addItem(list, { id: target.dataset.id, name: target.dataset.name, part: target.dataset.part });
       save();

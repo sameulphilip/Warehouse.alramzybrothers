@@ -148,3 +148,14 @@ test('a cleanup failure after a successful swap is only logged', (t) => {
   assert.equal(fs.readFileSync(path.join(s.siteDir, 'new.txt'), 'utf8'), 'new');
   assert.equal(logged.length, 1);
 });
+
+test('technical specs reach product and listing pages in both languages', async () => {
+  const s = setup();
+  s.catalog.items['1'].specs = 'OEM: 003 420 7718\nOEM: 002 420 5218\nDIA: 41.27 mm';
+  await buildSite({ ...s, baseUrl: 'https://c.test', logoFallback: LOGO });
+  for (const rel of ['ar/p/1/index.html', 'en/p/1/index.html', 'ar/brand/b1/index.html']) {
+    const html = fs.readFileSync(path.join(s.siteDir, rel), 'utf8');
+    assert.match(html, /003 420 7718<\/span><span dir="ltr">002 420 5218/, rel);
+    assert.match(html, /41\.27 mm/, rel);
+  }
+});
