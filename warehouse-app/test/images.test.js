@@ -16,8 +16,9 @@ function blank(width, height) {
 
 test('saveImage writes a large and a small webp without metadata', async () => {
   const dir = tempDir();
-  const png = await blank(2400, 1200).png().toBuffer();
-  const id = await saveImage(png, dir);
+  const jpeg = await blank(2400, 1200).jpeg().withExif({ IFD0: { Copyright: 'secret-owner' } }).toBuffer();
+  assert.ok((await sharp(jpeg).metadata()).exif, 'input must carry EXIF');
+  const id = await saveImage(jpeg, dir);
   assert.equal(isImageId(id), true);
   const large = await sharp(path.join(dir, `${id}-lg.webp`)).metadata();
   const small = await sharp(path.join(dir, `${id}-sm.webp`)).metadata();
@@ -25,6 +26,7 @@ test('saveImage writes a large and a small webp without metadata', async () => {
   assert.equal(large.width, 1600);
   assert.equal(large.exif, undefined);
   assert.equal(small.width, 480);
+  assert.equal(small.exif, undefined);
 });
 
 test('saveImage does not enlarge small images', async () => {
