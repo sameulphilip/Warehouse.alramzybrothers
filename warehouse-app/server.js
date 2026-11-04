@@ -4366,9 +4366,12 @@ async function stockAfter(tx, snap) {
       }
     }
     await txQuery(tx, `
-      UPDATE tblProductsStores SET ProductStock = ISNULL(ProductStock, 0) + @delta
+      UPDATE tblProductsStores
+      SET ProductStock = ISNULL(ProductStock, 0) + @delta, PurchasedStock = ISNULL(PurchasedStock, 0) + @delta
       WHERE ProductID = @pid AND StoreID = @store AND CompCode = 0;
-      UPDATE tblProducts SET ProductStock = ISNULL(ProductStock, 0) + @delta WHERE ProductId = @pid;
+      UPDATE tblProducts
+      SET ProductStock = ISNULL(ProductStock, 0) + @delta, PurchasedStock = ISNULL(PurchasedStock, 0) + @delta
+      WHERE ProductId = @pid;
     `, [
       { name: 'delta', type: sql.Numeric(18, 5), value: delta },
       { name: 'pid', type: sql.Numeric(18, 0), value: productId },
