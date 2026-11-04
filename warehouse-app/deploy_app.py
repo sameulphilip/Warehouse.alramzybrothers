@@ -38,7 +38,7 @@ for file in local.rglob("*"):
     print("upload", remote)
     sftp.put(str(file), remote)
 sftp.close()
-stdin, stdout, stderr = client.exec_command("chmod 600 /var/www/warehouse.alramzybrothers.com/data/users.json; if [ -f /var/www/warehouse.alramzybrothers.com/data/activity.json ]; then chmod 600 /var/www/warehouse.alramzybrothers.com/data/activity.json; fi; if [ -f /var/www/warehouse.alramzybrothers.com/data/db-target.json ]; then chmod 600 /var/www/warehouse.alramzybrothers.com/data/db-target.json; fi; cd /var/www/warehouse.alramzybrothers.com && npm install --omit=dev --no-audit --no-fund && pm2 restart warehouse --update-env && sleep 1 && pm2 describe warehouse | sed -n '1,20p'", timeout=40)
+stdin, stdout, stderr = client.exec_command("chmod 600 /var/www/warehouse.alramzybrothers.com/data/users.json; if [ -f /var/www/warehouse.alramzybrothers.com/data/activity.json ]; then chmod 600 /var/www/warehouse.alramzybrothers.com/data/activity.json; fi; if [ -f /var/www/warehouse.alramzybrothers.com/data/db-target.json ]; then chmod 600 /var/www/warehouse.alramzybrothers.com/data/db-target.json; fi; cd /var/www/warehouse.alramzybrothers.com && npm install --omit=dev --no-audit --no-fund && pm2 restart warehouse --update-env && sleep 1 && pm2 describe warehouse | sed -n '1,20p'", timeout=600)
 print(stdout.read().decode("utf-8", "replace"))
 print(stderr.read().decode("utf-8", "replace"))
 client.close()

@@ -15,14 +15,20 @@ nginx = r"""server {
 
     location = / { return 302 /ar/; }
     location /media/ {
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
         add_header Cache-Control "public, max-age=2592000, immutable";
         try_files $uri =404;
     }
     location /assets/ {
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
         add_header Cache-Control "public, max-age=604800";
         try_files $uri =404;
     }
     location / {
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
         add_header Cache-Control "public, max-age=300";
         try_files $uri $uri/ =404;
     }
