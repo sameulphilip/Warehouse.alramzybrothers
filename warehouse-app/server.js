@@ -5480,33 +5480,40 @@ async function catalogAvailability(ids) {
   return map;
 }
 
-const catalogStore = createCatalogStore(path.join(__dirname, 'data', 'catalog.json'));
-const catalogMediaDir = path.join(__dirname, 'data', 'catalog-media');
-const catalogPublisher = createCatalogPublisher({
-  store: catalogStore,
-  snapshotFile: path.join(__dirname, 'data', 'catalog-published.json'),
-  mediaDir: catalogMediaDir,
-  siteDir: process.env.CATALOG_SITE_DIR || '/var/www/catalog.alramzybrothers.com/site',
-  baseUrl: process.env.CATALOG_BASE_URL || 'https://catalog.alramzybrothers.com',
-  logoFallback: path.join(__dirname, 'public', 'logo.png'),
-  loadProducts: catalogProducts,
-  loadAvailability: catalogAvailability
-});
-app.use(createCatalogRouter({
-  store: catalogStore,
-  mediaDir: catalogMediaDir,
-  publisher: catalogPublisher,
-  loadProducts: catalogProducts,
-  requireCatalog,
-  actorName,
-  record: recordActivity,
-  siteUrl: process.env.CATALOG_BASE_URL || 'https://catalog.alramzybrothers.com'
-}));
+let catalogPublisher = null;
+try {
+  const catalogStore = createCatalogStore(path.join(__dirname, 'data', 'catalog.json'));
+  const catalogMediaDir = path.join(__dirname, 'data', 'catalog-media');
+  catalogPublisher = createCatalogPublisher({
+    store: catalogStore,
+    snapshotFile: path.join(__dirname, 'data', 'catalog-published.json'),
+    mediaDir: catalogMediaDir,
+    siteDir: process.env.CATALOG_SITE_DIR || '/var/www/catalog.alramzybrothers.com/site',
+    baseUrl: process.env.CATALOG_BASE_URL || 'https://catalog.alramzybrothers.com',
+    logoFallback: path.join(__dirname, 'public', 'logo.png'),
+    loadProducts: catalogProducts,
+    loadAvailability: catalogAvailability
+  });
+  app.use(createCatalogRouter({
+    store: catalogStore,
+    mediaDir: catalogMediaDir,
+    publisher: catalogPublisher,
+    loadProducts: catalogProducts,
+    requireCatalog,
+    actorName,
+    record: recordActivity,
+    siteUrl: process.env.CATALOG_BASE_URL || 'https://catalog.alramzybrothers.com'
+  }));
+} catch (error) {
+  catalogPublisher = null;
+  console.error('catalog disabled', error.message);
+}
 
 app.listen(PORT, '127.0.0.1', () => {
   console.log(`warehouse listening on 127.0.0.1:${PORT}`);
   setInterval(() => {
     if (readTarget() === 'standby') return;
+    if (!catalogPublisher) return;
     catalogPublisher.refreshAvailability().catch((error) => console.error('catalog refresh', error.message));
   }, 15 * 60 * 1000);
 });

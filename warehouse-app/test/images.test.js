@@ -53,3 +53,18 @@ test('deleteImage removes both sizes and ignores bad ids', async () => {
   deleteImage(id, dir);
   assert.deepEqual(fs.readdirSync(dir), ['keep.txt']);
 });
+
+test('requiring images.js does not load sharp until it is needed', () => {
+  const { execFileSync } = require('child_process');
+  const script = "const m=require('./catalog/images');const loaded=()=>Object.keys(require.cache).some((k)=>/node_modules[\\\\/]sharp[\\\\/]/.test(k));const before=loaded();m.deleteImage('0000000000000000',require('os').tmpdir());console.log(JSON.stringify({before,exports:Object.keys(m).sort()}));";
+  const out = JSON.parse(execFileSync(process.execPath, ['-e', script], { cwd: path.join(__dirname, '..') }).toString());
+  assert.equal(out.before, false);
+});
+
+test('saveImage rejects images over the pixel limit', async () => {
+  const dir = tempDir();
+  const huge = await sharp({ create: { width: 8000, height: 7000, channels: 3, background: '#000' } }).png({ compressionLevel: 9 }).toBuffer();
+  assert.ok(huge.length < 8 * 1024 * 1024, 'fixture must be under the byte limit');
+  await assert.rejects(saveImage(huge, dir), /صورة/);
+  assert.deepEqual(fs.readdirSync(dir), []);
+});

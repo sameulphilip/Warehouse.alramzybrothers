@@ -1,11 +1,17 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const sharp = require('sharp');
 
 const MAX_BYTES = 8 * 1024 * 1024;
 const ALLOWED = new Set(['jpeg', 'png', 'webp']);
+const MAX_INPUT_PIXELS = 50000000;
 const SIZES = [['lg', 1600, 82], ['sm', 480, 78]];
+
+let sharpModule = null;
+function getSharp() {
+  if (!sharpModule) sharpModule = require('sharp');
+  return sharpModule;
+}
 
 function isImageId(value) {
   return /^[a-f0-9]{16}$/.test(String(value || ''));
@@ -16,7 +22,7 @@ async function saveImage(buffer, mediaDir) {
   if (buffer.length > MAX_BYTES) throw new Error('الصورة أكبر من 8 ميجا');
   let meta;
   try {
-    meta = await sharp(buffer).metadata();
+    meta = await getSharp()(buffer, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
   } catch (error) {
     throw new Error('الملف مش صورة مقبولة');
   }
@@ -25,7 +31,7 @@ async function saveImage(buffer, mediaDir) {
   fs.mkdirSync(mediaDir, { recursive: true });
   try {
     for (const [size, width, quality] of SIZES) {
-      await sharp(buffer)
+      await getSharp()(buffer, { limitInputPixels: MAX_INPUT_PIXELS })
         .rotate()
         .resize({ width, withoutEnlargement: true })
         .webp({ quality })
