@@ -11,7 +11,7 @@ function fail(message, status = 400) {
 
 function createCatalogRouter({ store, mediaDir, publisher, loadProducts, requireCatalog, actorName, record, siteUrl }) {
   const router = express.Router();
-  const raw = express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: MAX_BYTES });
+  const raw = express.raw({ type: () => true, limit: MAX_BYTES });
   const wrap = (handler) => async (req, res) => {
     try {
       await handler(req, res);
@@ -33,6 +33,13 @@ function createCatalogRouter({ store, mediaDir, publisher, loadProducts, require
       list.forEach((id) => deleteImage(id, mediaDir));
     } catch (error) {
       console.error('catalog media cleanup', error);
+    }
+  };
+  const forgetPublished = (productId, imageId) => {
+    try {
+      publisher.forget(productId, imageId);
+    } catch (error) {
+      console.error('catalog snapshot forget', error.message);
     }
   };
   const productIdOf = (req) => {
@@ -108,7 +115,10 @@ function createCatalogRouter({ store, mediaDir, publisher, loadProducts, require
       return item;
     });
     record(req, { action: 'catalog', detail: `إزالة صنف ${id} من الكتالوج`, ref: `product:${id}` });
-    if (removed) cleanupMedia(removed.images);
+    if (removed) {
+      forgetPublished(id);
+      cleanupMedia(removed.images);
+    }
     res.json({ ok: true });
   }));
 
@@ -147,6 +157,7 @@ function createCatalogRouter({ store, mediaDir, publisher, loadProducts, require
       return entry;
     });
     record(req, { action: 'catalog', detail: `حذف صورة من كتالوج صنف ${id}`, ref: `product:${id}` });
+    forgetPublished(id, imageId);
     cleanupMedia(imageId);
     res.json({ item });
   }));

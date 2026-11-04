@@ -13,13 +13,20 @@ async function start(overrides = {}) {
   const store = overrides.store || createStore(path.join(dir, 'catalog.json'));
   const mediaDir = path.join(dir, 'media');
   const records = [];
+  const forgets = [];
   const app = express();
   app.use(express.json());
   app.use(createCatalogRouter({
     store,
     mediaDir,
-    publisher: { publish: async () => ({ buildId: 'b', products: 1, pages: 9, publishedAt: '2026-11-04T10:00:00.000Z' }) },
-    loadProducts: overrides.loadProducts || (async (ids) => new Map(ids.filter((id) => id === 7212).map((id) => [id, { name: 'انبوبه', code: '70.3' }]))),
+    publisher: {
+      publish: async () => ({ buildId: 'b', products: 1, pages: 9, publishedAt: '2026-11-04T10:00:00.000Z' }),
+      forget: (...args) => {
+        forgets.push(args);
+        if (overrides.forget) overrides.forget(...args);
+      }
+    },
+    loadProducts: overrides.loadProducts || (async (ids) => new Map(ids.filter((id) => id === 7212 || id === 7213).map((id) => [id, { name: 'انبوبه', code: '70.3' }]))),
     requireCatalog: (req, res, next) => (req.get('x-deny') ? res.status(403).json({ error: 'ممنوع' }) : next()),
     actorName: () => 'سامح',
     record: (req, entry) => records.push(entry),
@@ -37,7 +44,7 @@ async function start(overrides = {}) {
     const type = res.headers.get('content-type') || '';
     return { status: res.status, body: type.includes('json') ? await res.json() : await res.arrayBuffer() };
   };
-  return { dir, store, mediaDir, records, server, call };
+  return { dir, store, mediaDir, records, forgets, server, call };
 }
 
 const png = () => sharp({ create: { width: 64, height: 64, channels: 3, background: '#c4161c' } }).png().toBuffer();
@@ -80,6 +87,7 @@ test('catalog routes save items, images, lists, company and publish', async (t) 
 
   r = await s.call('DELETE', `/api/catalog/items/7212/images/${first}`);
   assert.deepEqual(r.body.item.images, [second]);
+  assert.deepEqual(s.forgets, [[7212, first]]);
   assert.equal(fs.existsSync(path.join(s.mediaDir, `${first}-lg.webp`)), false);
 
   r = await s.call('PUT', '/api/catalog/company', { whatsapp: '01001234567', aboutAr: 'نبذة' });
@@ -113,8 +121,11 @@ test('catalog routes enforce the image limit, image type and permission', async 
   let r = await s.call('POST', '/api/catalog/items/7212/images', await png(), { 'Content-Type': 'image/png' });
   assert.equal(r.status, 400);
   assert.match(r.body.error, /5/);
-  r = await s.call('POST', '/api/catalog/items/7212/images', Buffer.from('GIF89a'), { 'Content-Type': 'image/gif' });
+  await s.call('PUT', '/api/catalog/items/7213', { nameAr: 'y' });
+  const gif = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#000' } }).gif().toBuffer();
+  r = await s.call('POST', '/api/catalog/items/7213/images', gif, { 'Content-Type': 'image/gif' });
   assert.equal(r.status, 400);
+  assert.equal(r.body.error, 'المقبول JPG أو PNG أو WebP بس');
   r = await s.call('GET', '/api/catalog', undefined, { 'x-deny': '1' });
   assert.equal(r.status, 403);
 });
@@ -247,4 +258,27 @@ test('replacing the logo is audited even when old logo cleanup fails', async (t)
   assert.notEqual(r.body.company.logoId, firstLogo);
   assert.equal(s.records.length, beforeLogoReplace + 1);
   assert.match(s.records.at(-1).detail, /شعار/);
+});
+
+test('a failing publisher.forget never fails the delete', async (t) => {
+  const prevError = console.error;
+  console.error = () => {};
+  t.after(() => { console.error = prevError; });
+
+  const s = await start({ forget: () => { throw new Error('snapshot unreadable'); } });
+  t.after(() => s.server.close());
+
+  await s.call('PUT', '/api/catalog/items/7212', { nameAr: 'x' });
+  let r = await s.call('POST', '/api/catalog/items/7212/images', await png(), { 'Content-Type': 'image/png' });
+  const imageId = r.body.item.images[0];
+  r = await s.call('DELETE', `/api/catalog/items/7212/images/${imageId}`);
+  assert.equal(r.status, 200);
+  assert.equal(fs.existsSync(path.join(s.mediaDir, `${imageId}-lg.webp`)), false);
+  r = await s.call('POST', '/api/catalog/items/7212/images', await png(), { 'Content-Type': 'image/png' });
+  const secondId = r.body.item.images[0];
+  r = await s.call('DELETE', '/api/catalog/items/7212');
+  assert.equal(r.status, 200);
+  assert.equal(s.store.load().items['7212'], undefined);
+  assert.equal(fs.existsSync(path.join(s.mediaDir, `${secondId}-lg.webp`)), false);
+  assert.equal(s.forgets.length, 2);
 });
