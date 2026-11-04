@@ -2942,7 +2942,12 @@ async function txQuery(tx, text, inputs = []) {
     ? inputs.concat([{ name: 'actor', type: sql.NVarChar(50), value: tx.actor }])
     : inputs;
   for (const item of all) request.input(item.name, item.type, item.value);
-  return request.query(text);
+  try {
+    return await request.query(text);
+  } catch (error) {
+    if (/CK_tblInventory_/.test(String(error.message))) throw new Error('الرصيد لا يكفي في المخزن المختار لإتمام العملية');
+    throw error;
+  }
 }
 
 function businessDay() {
@@ -4339,44 +4344,52 @@ async function stockBefore(tx, productIds, detail) {
   return { products, before: await stockNet(tx, products) };
 }
 
-// ProductStock is a running balance kept by the old program too, so apply only this transaction's movement delta.
+async function stockTriggersActive(tx) {
+  const row = (await txQuery(tx, `
+    SELECT COUNT(*) AS n FROM sys.triggers
+    WHERE parent_id = OBJECT_ID('tblInventory') AND name IN ('trgInventoryInsert', 'trgInventoryDelete') AND is_disabled = 0
+  `)).recordset[0];
+  return Number(row && row.n) === 2;
+}
+
+// The old program's tblInventory triggers keep ProductStock; only apply the delta here when they are missing.
 async function stockAfter(tx, snap) {
   const after = await stockNet(tx, snap.products);
+  const triggers = await stockTriggersActive(tx);
   for (const key of new Set([...snap.before.keys(), ...after.keys()])) {
     const delta = roundTo((after.get(key) || 0) - (snap.before.get(key) || 0), 5);
     if (!delta) continue;
     const [productId, storeId] = key.split(':').map(Number);
-    await ensureStore(tx, productId, storeId);
-    if (delta < 0) {
-      const current = (await txQuery(tx, `
-        SELECT ISNULL(ps.ProductStock, 0) AS qty, ISNULL(p.ProductName, N'') AS name, ISNULL(s.StoreName, N'') AS storeName
-        FROM tblProductsStores ps WITH (UPDLOCK, HOLDLOCK)
-        LEFT JOIN tblProducts p ON p.ProductId = ps.ProductID
-        LEFT JOIN tblStores s ON s.StoreID = ps.StoreID
-        WHERE ps.ProductID = @pid AND ps.StoreID = @store AND ps.CompCode = 0
-      `, [
-        { name: 'pid', type: sql.Numeric(18, 0), value: productId },
-        { name: 'store', type: sql.Numeric(18, 0), value: storeId }
-      ])).recordset[0] || { qty: 0, name: '', storeName: '' };
-      const available = Number(current.qty) || 0;
-      if (available + delta < -0.00001) {
-        const label = current.name || `صنف ${productId}`;
-        const where = current.storeName || `مخزن ${storeId}`;
-        throw new Error(`الرصيد لا يكفي: ${label} في ${where} — المتاح ${roundTo(Math.max(available, 0), 2)} والمطلوب ${roundTo(-delta, 2)}`);
-      }
-    }
-    await txQuery(tx, `
-      UPDATE tblProductsStores
-      SET ProductStock = ISNULL(ProductStock, 0) + @delta, PurchasedStock = ISNULL(PurchasedStock, 0) + @delta
-      WHERE ProductID = @pid AND StoreID = @store AND CompCode = 0;
-      UPDATE tblProducts
-      SET ProductStock = ISNULL(ProductStock, 0) + @delta, PurchasedStock = ISNULL(PurchasedStock, 0) + @delta
-      WHERE ProductId = @pid;
-    `, [
+    const inputs = [
       { name: 'delta', type: sql.Numeric(18, 5), value: delta },
       { name: 'pid', type: sql.Numeric(18, 0), value: productId },
       { name: 'store', type: sql.Numeric(18, 0), value: storeId }
-    ]);
+    ];
+    if (!triggers) {
+      await ensureStore(tx, productId, storeId);
+      await txQuery(tx, `
+        UPDATE tblProductsStores
+        SET ProductStock = ISNULL(ProductStock, 0) + @delta, PurchasedStock = ISNULL(PurchasedStock, 0) + @delta
+        WHERE ProductID = @pid AND StoreID = @store AND CompCode = 0;
+        UPDATE tblProducts
+        SET ProductStock = ISNULL(ProductStock, 0) + @delta, PurchasedStock = ISNULL(PurchasedStock, 0) + @delta
+        WHERE ProductId = @pid;
+      `, inputs);
+    }
+    if (delta > 0) continue;
+    const current = (await txQuery(tx, `
+      SELECT ISNULL(ps.ProductStock, 0) AS qty, ISNULL(p.ProductName, N'') AS name, ISNULL(s.StoreName, N'') AS storeName
+      FROM tblProductsStores ps
+      LEFT JOIN tblProducts p ON p.ProductId = ps.ProductID
+      LEFT JOIN tblStores s ON s.StoreID = ps.StoreID
+      WHERE ps.ProductID = @pid AND ps.StoreID = @store AND ps.CompCode = 0
+    `, inputs)).recordset[0] || { qty: 0, name: '', storeName: '' };
+    const balance = Number(current.qty) || 0;
+    if (balance < -0.00001) {
+      const label = current.name || `صنف ${productId}`;
+      const where = current.storeName || `مخزن ${storeId}`;
+      throw new Error(`الرصيد لا يكفي: ${label} في ${where} — المتاح ${roundTo(Math.max(balance - delta, 0), 2)} والمطلوب ${roundTo(-delta, 2)}`);
+    }
   }
 }
 
