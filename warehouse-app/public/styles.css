@@ -391,6 +391,10 @@ main > .panel-note { margin: 8px 2px 12px; padding: 0; color: var(--muted); font
 .paid-amount { display: flex; align-items: center; gap: 8px; min-height: 44px; font-weight: 500; white-space: nowrap; }
 .paid-amount input { width: 8.5rem; }
 .op-date input { width: 10.5rem; }
+.line-avail { display: block; margin-top: 2px; font-size: .75rem; color: var(--muted); }
+.line-avail.short { color: var(--red); font-weight: 700; }
+.saved-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid #b7e1c4; border-radius: 10px; background: #ecf8f0; color: #17643a; }
+.saved-bar strong { flex: 1 1 auto; }
 .line-grid .line-store { width: 100%; min-width: 0; margin: 0; }
 .meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; color: var(--muted); margin: 8px 0; font-size: 0.86rem; }
 .note { color: var(--muted); font-size: 0.84rem; line-height: 1.7; background: #f8fafd; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }

@@ -9,6 +9,7 @@ const { createPublisher: createCatalogPublisher } = require('./catalog/publisher
 const { createCatalogRouter } = require('./catalog/routes');
 const { cleanPerms, canEditCatalog } = require('./catalog/access');
 const { OP_DAY, OP_STAMP, parseOpDay } = require('./op_date');
+const { combineBatch } = require('./tx_batch');
 
 function loadEnv(file) {
   try {
@@ -68,7 +69,9 @@ function sqlConfig(target) {
     database: process.env.SQL_DATABASE || 'RamixDB',
     connectionTimeout: standby ? 8000 : 20000,
     requestTimeout: 45000,
-    pool: { max: standby ? 8 : 10, min: 0, idleTimeoutMillis: 30000 },
+    // The database is ~230 ms away: keep connections open and skip the per-checkout SELECT 1.
+    validateConnection: false,
+    pool: { max: standby ? 8 : 10, min: standby ? 0 : 2, idleTimeoutMillis: standby ? 30000 : 600000 },
     options: {
       encrypt: standby,
       trustServerCertificate: true,
@@ -108,6 +111,8 @@ async function switchDatabase(target) {
   await pool.connect();
   const previous = poolPromise;
   poolPromise = Promise.resolve(pool);
+  accountCache.clear();
+  triggerState.at = 0;
   writeMeta({ target });
   previous.then((old) => old.close()).catch(() => {});
   return pool;
@@ -357,12 +362,19 @@ async function runQuery(sqlText, inputs = []) {
   return sets[0] || [];
 }
 
-async function runSets(sqlText, inputs = []) {
+async function runSets(sqlText, inputs = [], retried = false) {
   const pool = await poolPromise;
   const request = pool.request();
   for (const item of inputs) request.input(item.name, item.type, item.value);
-  const result = await request.query(sqlText);
-  return result.recordsets;
+  try {
+    const result = await request.query(sqlText);
+    return result.recordsets;
+  } catch (error) {
+    if (!retried && /ESOCKET|ECONNCLOSED|ECONNRESET|ENOTOPEN/.test(`${error.code || ''} ${error.message || ''}`)) {
+      return runSets(sqlText, inputs, true);
+    }
+    throw error;
+  }
 }
 
 const memoryCache = new Map();
@@ -1412,6 +1424,7 @@ app.post('/api/stores', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const taken = await txQuery(tx, `
       SELECT TOP 1 StoreID FROM tblStores WITH (UPDLOCK, HOLDLOCK)
@@ -1453,6 +1466,7 @@ app.put('/api/stores/:id', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const existing = await txQuery(tx, `
       SELECT StoreID, ISNULL(StoreAccCode, N'') AS accCode
@@ -1497,6 +1511,7 @@ app.delete('/api/stores/:id', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const existing = await txQuery(tx, `
       SELECT StoreID, ISNULL(StoreName, N'') AS name, ISNULL(StoreAccCode, N'') AS accCode
@@ -1616,6 +1631,7 @@ app.post('/api/branches', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const taken = await txQuery(tx, `
       SELECT TOP 1 BranchID FROM tblBranch WITH (UPDLOCK, HOLDLOCK)
@@ -1660,6 +1676,7 @@ app.put('/api/branches/:id', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const existing = await txQuery(tx, `
       SELECT BranchID FROM tblBranch WITH (UPDLOCK, HOLDLOCK) WHERE BranchID = @id
@@ -1703,6 +1720,7 @@ app.delete('/api/branches/:id', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const existing = await txQuery(tx, `
       SELECT BranchID, ISNULL(BranchName, N'') AS name
@@ -1742,6 +1760,7 @@ app.put('/api/stores/:id/branch', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const store = await txQuery(tx, `
       SELECT StoreID, ISNULL(StoreName, N'') AS name FROM tblStores WITH (UPDLOCK, HOLDLOCK) WHERE StoreID = @id
@@ -2328,6 +2347,7 @@ app.delete('/api/products/:id', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const existing = await txQuery(tx, `
       SELECT ProductId, ISNULL(ProductName, N'') AS name, ISNULL(ProductCode, N'') AS code
@@ -2974,18 +2994,47 @@ app.get('/api/stock', requireAuth, async (req, res) => {
   }
 });
 
-async function txQuery(tx, text, inputs = []) {
-  const request = new sql.Request(tx);
-  let all = tx.actor && !inputs.some((item) => item.name === 'actor')
+function txInputs(tx, text, inputs) {
+  let all = tx.actor && text.includes('@actor') && !inputs.some((item) => item.name === 'actor')
     ? inputs.concat([{ name: 'actor', type: sql.NVarChar(50), value: tx.actor }])
     : inputs;
   if (text.includes('@opDay') && !all.some((item) => item.name === 'opDay')) {
     if (!tx.opDay) throw new Error('تاريخ العملية غير محدد');
     all = all.concat([{ name: 'opDay', type: sql.NVarChar(10), value: tx.opDay }]);
   }
-  for (const item of all) request.input(item.name, item.type, item.value);
+  return all;
+}
+
+// Queued statements must reach the database before commit, so commit flushes them.
+function trackTx(tx) {
+  if (tx.tracked) return;
+  tx.tracked = true;
+  tx.pending = [];
+  tx.trips = 0;
+  tx.startedAt = Date.now();
+  const commit = tx.commit.bind(tx);
+  tx.commit = async () => {
+    if (tx.pending.length) await txQuery(tx, 'SELECT 1 AS flushed');
+    const result = await commit();
+    tx.trips += 1;
+    console.log(`[tx] ${tx.label || ''} trips=${tx.trips} ms=${Date.now() - tx.startedAt}`);
+    return result;
+  };
+}
+
+function txExec(tx, text, inputs = []) {
+  trackTx(tx);
+  tx.pending.push({ text, inputs: txInputs(tx, text, inputs) });
+}
+
+async function txQuery(tx, text, inputs = []) {
+  trackTx(tx);
+  const batch = combineBatch(tx.pending.splice(0), { text, inputs: txInputs(tx, text, inputs) });
+  const request = new sql.Request(tx);
+  for (const item of batch.inputs) request.input(item.name, item.type, item.value);
+  tx.trips += 1;
   try {
-    return await request.query(text);
+    return await request.query(batch.text);
   } catch (error) {
     if (/CK_tblInventory_/.test(String(error.message))) throw new Error('الرصيد لا يكفي في المخزن المختار في تاريخ العملية');
     throw error;
@@ -3009,14 +3058,49 @@ async function nextNumber(tx, table, column) {
   return Number(result.recordset[0].n);
 }
 
+async function nextNumbers(tx, specs) {
+  const parts = specs.map(([table, column], index) =>
+    `(SELECT ISNULL(MAX(${column}), 0) + 1 FROM ${table} WITH (UPDLOCK, HOLDLOCK)) AS n${index}`);
+  const row = (await txQuery(tx, `SELECT ${parts.join(', ')}`)).recordset[0];
+  return specs.map((spec, index) => Number(row[`n${index}`]));
+}
+
+const accountCache = new Map();
+const ACCOUNT_TTL = 10 * 60 * 1000;
+
 async function accountByCode(tx, code) {
+  const hit = accountCache.get(String(code));
+  if (hit && Date.now() - hit.at < ACCOUNT_TTL) return hit.account;
   const result = await txQuery(
     tx,
     `SELECT TOP 1 AccountId, AccCode FROM tblAccTree WHERE AccCode = @code`,
     [{ name: 'code', type: sql.NVarChar(50), value: code }]
   );
   if (!result.recordset[0]) throw new Error(`الحساب ${code} غير موجود`);
+  accountCache.set(String(code), { account: result.recordset[0], at: Date.now() });
   return result.recordset[0];
+}
+
+function idInputs(prefix, ids) {
+  return ids.map((id, index) => ({ name: `${prefix}${index}`, type: sql.Numeric(18, 0), value: id }));
+}
+
+// Locks the products like assertProduct and returns each one's latest cost.
+async function lockProductCosts(tx, productIds) {
+  const ids = [...new Set(productIds.map(Number))];
+  const costs = new Map();
+  if (!ids.length) return costs;
+  const rows = (await txQuery(tx, `
+    SELECT p.ProductId AS pid, ISNULL((
+      SELECT TOP 1 ISNULL(i.Cost, 0) FROM tblInventory i
+      WHERE i.ProductID = p.ProductId AND i.Cost IS NOT NULL ORDER BY i.ID DESC
+    ), 0) AS cost
+    FROM tblProducts p WITH (UPDLOCK, HOLDLOCK)
+    WHERE p.ProductId IN (${ids.map((id, index) => `@p${index}`).join(', ')})
+  `, idInputs('p', ids))).recordset;
+  for (const row of rows) costs.set(Number(row.pid), Number(row.cost) || 0);
+  if (costs.size !== ids.length) throw new Error('أحد الأصناف غير موجود');
+  return costs;
 }
 
 app.post('/api/sales', requireAuth, async (req, res) => {
@@ -3055,6 +3139,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   tx.opDay = opDay;
   try {
     const stockSnap = await stockBefore(tx, bodyProductIds(req.body));
@@ -3073,8 +3158,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
       clientAccount = await accountByCode(tx, client.accCode);
     }
 
-    const invoiceNo = await nextNumber(tx, 'tblSellingInvoice', 'SellingInvoiceNo');
-    const journalNo = await nextNumber(tx, 'tblJournalEntry', 'JournalEntryNo');
+    const [invoiceNo, journalNo] = await nextNumbers(tx, [['tblSellingInvoice', 'SellingInvoiceNo'], ['tblJournalEntry', 'JournalEntryNo']]);
     const description = clip(`فاتورة بيع رقم (${invoiceNo}) - (${client.name})`, 200);
     const journal = await txQuery(tx, `
       INSERT INTO tblJournalEntry
@@ -3096,7 +3180,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
     journalLines.push({ account: salesAccount, debit: 0, credit: invoiceTotal, text: `مبيعات - (${client.name})` });
     for (let index = 0; index < journalLines.length; index += 1) {
       const line = journalLines[index];
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblJournalEntryDetails
           (Ser, JournalEntryID, AccountId, AccCode, JEPartyDis, Debit, Credit, CurrencyID, ExRate,
            DocNum, Journal, CompCode, PeriodCode, InsertedDate, InsertedBy)
@@ -3142,20 +3226,11 @@ app.post('/api/sales', requireAuth, async (req, res) => {
     ]);
     const invoiceId = invoice.recordset[0].id;
 
+    const costs = await lockProductCosts(tx, cleanLines.map((line) => line.productId));
     for (const line of cleanLines) {
-      const costRow = await txQuery(tx, `
-        SELECT TOP 1 ISNULL(Cost, 0) AS cost
-        FROM tblInventory
-        WHERE ProductID = @pid AND Cost IS NOT NULL
-        ORDER BY ID DESC
-      `, [{ name: 'pid', type: sql.Numeric(18, 0), value: line.productId }]);
-      const cost = costRow.recordset[0] ? Number(costRow.recordset[0].cost) : 0;
+      const cost = costs.get(line.productId) || 0;
       const guid = crypto.randomUUID();
-      const product = await txQuery(tx, `
-        SELECT ProductId FROM tblProducts WITH (UPDLOCK, HOLDLOCK) WHERE ProductId = @pid
-      `, [{ name: 'pid', type: sql.Numeric(18, 0), value: line.productId }]);
-      if (!product.recordset[0]) throw new Error('أحد الأصناف غير موجود');
-      await txQuery(tx, `
+      txExec(tx, `
         IF NOT EXISTS (
           SELECT 1 FROM tblProductsStores WITH (UPDLOCK, HOLDLOCK)
           WHERE ProductID = @pid AND StoreID = @store AND CompCode = 0
@@ -3168,7 +3243,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
         { name: 'store', type: sql.Numeric(18, 0), value: line.storeId }
       ]);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblInventory
           (InvoiceNo, InvoiceDate, DocumentDate, ProductID, ClientID, StoreID, InQuantity, InBonus,
            OutQuantity, OutBonus, LotPricePerUnit, TotalLotPrice, Cost, TransactionID,
@@ -3187,7 +3262,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
         { name: 'cost', type: sql.Numeric(18, 4), value: cost },
         { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblSellingInvoicesDetails
           (SellingInvoiceID, ProductID, OutQuantity, OutBonus, UnitId, StockQty, ReturnedQuantity,
            ReturnedStockQty, StoreID, LotPricePerUnit, SellingPricePerUnit, TotalPrice, DiscountType,
@@ -3210,8 +3285,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
     }
 
     if (collected > 0) {
-      const safeNo = await nextNumber(tx, 'tblSafeOperations', 'SafeOperationDocumentNo');
-      const safeJournalNo = await nextNumber(tx, 'tblJournalEntry', 'JournalEntryNo');
+      const [safeNo, safeJournalNo] = await nextNumbers(tx, [['tblSafeOperations', 'SafeOperationDocumentNo'], ['tblJournalEntry', 'JournalEntryNo']]);
       const safeText = `تحصيل فاتورة بيع رقم (${invoiceNo})`;
       const safeJournal = await txQuery(tx, `
         INSERT INTO tblJournalEntry
@@ -3232,7 +3306,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
       ];
       for (let index = 0; index < safeLines.length; index += 1) {
         const line = safeLines[index];
-        await txQuery(tx, `
+        txExec(tx, `
           INSERT INTO tblJournalEntryDetails
             (Ser, JournalEntryID, AccountId, AccCode, JEPartyDis, Debit, Credit, CurrencyID, ExRate,
              DocNum, Journal, CompCode, PeriodCode, InsertedDate, InsertedBy)
@@ -3267,7 +3341,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
         { name: 'clientId', type: sql.Numeric(18, 0), value: client.ClientId || 0 },
         { name: 'journalId', type: sql.Numeric(18, 0), value: safeJournalId }
       ]);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblSellingInvoicesCollectingDetails
           (SellingInvoiceID, ClientID, SellingInvoiceTotalAmount, Collected, TotalCollectedAmount,
            OnCollectDiscount, TotalOnCollectDiscount, SafeOperationID)
@@ -3329,6 +3403,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   tx.opDay = opDay;
   try {
     const stockSnap = await stockBefore(tx, bodyProductIds(req.body));
@@ -3344,8 +3419,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
     if (!counterCode) throw new Error('المورد ليس له كود حساب');
     const counterAccount = await accountByCode(tx, counterCode);
 
-    const invoiceNo = await nextNumber(tx, 'tblPurchaseInvoice', 'PurchaseInvoiceNo');
-    const journalNo = await nextNumber(tx, 'tblJournalEntry', 'JournalEntryNo');
+    const [invoiceNo, journalNo] = await nextNumbers(tx, [['tblPurchaseInvoice', 'PurchaseInvoiceNo'], ['tblJournalEntry', 'JournalEntryNo']]);
     const description = clip(`فاتورة شراء رقم (${invoiceNo}) - (${supplier.name})`, 200);
     const journal = await txQuery(tx, `
       INSERT INTO tblJournalEntry
@@ -3366,7 +3440,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
     ];
     for (let index = 0; index < journalLines.length; index += 1) {
       const line = journalLines[index];
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblJournalEntryDetails
           (Ser, JournalEntryID, AccountId, AccCode, JEPartyDis, Debit, Credit, CurrencyID, ExRate,
            DocNum, Journal, CompCode, PeriodCode, InsertedDate, InsertedBy)
@@ -3413,13 +3487,10 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
     ]);
     const invoiceId = invoice.recordset[0].id;
 
+    await assertProducts(tx, cleanLines.map((line) => line.productId));
     for (const line of cleanLines) {
-      const product = await txQuery(tx, `
-        SELECT ProductId FROM tblProducts WITH (UPDLOCK, HOLDLOCK) WHERE ProductId = @pid
-      `, [{ name: 'pid', type: sql.Numeric(18, 0), value: line.productId }]);
-      if (!product.recordset[0]) throw new Error('أحد الأصناف غير موجود');
       const guid = crypto.randomUUID();
-      await txQuery(tx, `
+      txExec(tx, `
         IF NOT EXISTS (
           SELECT 1 FROM tblProductsStores WITH (UPDLOCK, HOLDLOCK)
           WHERE ProductID = @pid AND StoreID = @store AND CompCode = 0
@@ -3432,7 +3503,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
         { name: 'store', type: sql.Numeric(18, 0), value: line.storeId }
       ]);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblInventory
           (InvoiceNo, InvoiceDate, DocumentDate, ProductID, SupplierID, StoreID, InQuantity, InBonus,
            OutQuantity, OutBonus, PurchasePricePerUnit, Cost, TransactionID, CompCode, RowGUID)
@@ -3448,7 +3519,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
         { name: 'price', type: sql.Numeric(18, 4), value: line.price },
         { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblPurchaseInvoicesDetails
           (PurchaseInvoiceID, ProductID, InQuantity, InBonus, UnitId, StockQty, ReturnedQuantity,
            ReturnedStockQty, StoreID, PurchasePrice, TotalPrice, DiscountType, DiscountRatio, DiscountAmount,
@@ -3469,8 +3540,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
     }
 
     if (collected > 0) {
-      const safeNo = await nextNumber(tx, 'tblSafeOperations', 'SafeOperationDocumentNo');
-      const safeJournalNo = await nextNumber(tx, 'tblJournalEntry', 'JournalEntryNo');
+      const [safeNo, safeJournalNo] = await nextNumbers(tx, [['tblSafeOperations', 'SafeOperationDocumentNo'], ['tblJournalEntry', 'JournalEntryNo']]);
       const safeText = `سداد فاتورة شراء رقم (${invoiceNo})`;
       const safeJournal = await txQuery(tx, `
         INSERT INTO tblJournalEntry
@@ -3491,7 +3561,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
       ];
       for (let index = 0; index < safeLines.length; index += 1) {
         const line = safeLines[index];
-        await txQuery(tx, `
+        txExec(tx, `
           INSERT INTO tblJournalEntryDetails
             (Ser, JournalEntryID, AccountId, AccCode, JEPartyDis, Debit, Credit, CurrencyID, ExRate,
              DocNum, Journal, CompCode, PeriodCode, InsertedDate, InsertedBy)
@@ -3526,7 +3596,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
         { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
         { name: 'journalId', type: sql.Numeric(18, 0), value: safeJournalId }
       ]);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblPurchaseInvoicesPayingDetails
           (PurchaseInvoiceID, SupplierID, PurchaseInvoiceTotalAmount, Paied, TotalPaiedAmount,
            OnPaiedDiscount, TotalOnPaiedDiscount, SafeOperationID)
@@ -3614,7 +3684,9 @@ function planLines(existing, incoming) {
     if (line.lineId && !old) throw new Error('سطر غير موجود في الفاتورة');
     if (old && Number(old.productId) === line.productId) {
       keep.add(line.lineId);
-      updates.push({ ...line, rowGuid: old.rowGuid, oldQty: Number(old.qty), oldStore: Number(old.storeId) });
+      const unchanged = old.price != null && roundTo(old.price, 4) === line.price
+        && roundTo(old.qty, 5) === line.qty && Number(old.storeId) === line.storeId;
+      updates.push({ ...line, rowGuid: old.rowGuid, oldQty: Number(old.qty), oldStore: Number(old.storeId), unchanged });
     } else inserts.push(line);
   }
   return { updates, inserts, deletes: existing.filter((line) => !keep.has(Number(line.lineId))) };
@@ -3626,19 +3698,27 @@ function assertOne(result, message) {
 }
 
 async function assertStores(tx, ids) {
-  for (const id of [...new Set(ids)]) {
-    const store = await txQuery(tx, `SELECT StoreID FROM tblStores WHERE StoreID = @id`, [
-      { name: 'id', type: sql.Numeric(18, 0), value: id }
-    ]);
-    if (!store.recordset[0]) throw new Error('المخزن غير موجود');
-  }
+  const unique = [...new Set(ids.map(Number))];
+  if (!unique.length) return;
+  const row = (await txQuery(tx, `
+    SELECT COUNT(DISTINCT StoreID) AS n FROM tblStores
+    WHERE StoreID IN (${unique.map((id, index) => `@s${index}`).join(', ')})
+  `, idInputs('s', unique))).recordset[0];
+  if (Number(row.n) !== unique.length) throw new Error('المخزن غير موجود');
 }
 
 async function assertProduct(tx, productId) {
-  const product = await txQuery(tx, `SELECT ProductId FROM tblProducts WITH (UPDLOCK, HOLDLOCK) WHERE ProductId = @pid`, [
-    { name: 'pid', type: sql.Numeric(18, 0), value: productId }
-  ]);
-  if (!product.recordset[0]) throw new Error('أحد الأصناف غير موجود');
+  await assertProducts(tx, [productId]);
+}
+
+async function assertProducts(tx, productIds) {
+  const unique = [...new Set(productIds.map(Number))];
+  if (!unique.length) return;
+  const row = (await txQuery(tx, `
+    SELECT COUNT(*) AS n FROM tblProducts WITH (UPDLOCK, HOLDLOCK)
+    WHERE ProductId IN (${unique.map((id, index) => `@p${index}`).join(', ')})
+  `, idInputs('p', unique))).recordset[0];
+  if (Number(row.n) !== unique.length) throw new Error('أحد الأصناف غير موجود');
 }
 
 function partyInput(body) {
@@ -3686,7 +3766,7 @@ async function createPartyAccount(tx, parentCode, id, name) {
     n += 1;
   }
   if (!code) throw new Error('تعذر توليد كود الحساب');
-  await txQuery(tx, `
+  txExec(tx, `
     INSERT INTO tblAccTree
       (AccCode, AccName, CurLevel, AccType, AccParent, AccCloseIn, HaveSub, AccDis, CompCode, StartDate, SubsDigits, RowGuid)
     VALUES
@@ -3709,10 +3789,11 @@ app.post('/api/clients', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const id = await nextNumber(tx, 'tblClients', 'ClientId');
     const code = await createPartyAccount(tx, '122102', id, item.name);
-    await txQuery(tx, `
+    txExec(tx, `
       INSERT INTO tblClients
         (ClientId, ClientName, SalesManId, RegionId, CountryID, AccCode, CategoryID, CompCode, PhoneNo, MobilNo)
       VALUES (@id, @name, 0, 0, 0, @code, 0, 0, @phone, @phone)
@@ -3739,10 +3820,11 @@ app.post('/api/suppliers', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const id = await nextNumber(tx, 'tblSuppliers', 'SupplierID');
     const code = await createPartyAccount(tx, '2421', id, item.name);
-    await txQuery(tx, `
+    txExec(tx, `
       INSERT INTO tblSuppliers
         (SupplierID, SupplierName, CountryID, AccCode, CompCode, PhoneNo, MobilNo)
       VALUES (@id, @name, 0, @code, 0, @phone, @phone)
@@ -3771,13 +3853,14 @@ app.put('/api/clients/:id', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const existing = await txQuery(tx, `
       SELECT ClientId, ISNULL(AccCode, N'') AS accCode
       FROM tblClients WITH (UPDLOCK, HOLDLOCK) WHERE ClientId = @id
     `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
     if (!existing.recordset[0]) throw new Error('العميل غير موجود');
-    await txQuery(tx, `
+    txExec(tx, `
       UPDATE tblClients SET ClientName = @name, PhoneNo = @phone, MobilNo = @phone WHERE ClientId = @id
     `, [
       { name: 'id', type: sql.Numeric(18, 0), value: id },
@@ -3802,6 +3885,7 @@ app.delete('/api/clients/:id', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const existing = await txQuery(tx, `
       SELECT ClientId, ISNULL(ClientName, N'') AS name, ISNULL(AccCode, N'') AS accCode
@@ -3815,7 +3899,7 @@ app.delete('/api/clients/:id', requireAuth, async (req, res) => {
       ) x
     `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
     if (blockers.recordset[0]) throw new Error(`لا يمكن حذف العميل لوجود ${blockers.recordset[0].reason}`);
-    await txQuery(tx, `DELETE FROM tblClients WHERE ClientId = @id`, [
+    txExec(tx, `DELETE FROM tblClients WHERE ClientId = @id`, [
       { name: 'id', type: sql.Numeric(18, 0), value: id }
     ]);
     await tryDeleteUnusedAccount(tx, existing.recordset[0].accCode);
@@ -3838,13 +3922,14 @@ app.put('/api/suppliers/:id', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const existing = await txQuery(tx, `
       SELECT SupplierID, ISNULL(AccCode, N'') AS accCode
       FROM tblSuppliers WITH (UPDLOCK, HOLDLOCK) WHERE SupplierID = @id
     `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
     if (!existing.recordset[0]) throw new Error('المورد غير موجود');
-    await txQuery(tx, `
+    txExec(tx, `
       UPDATE tblSuppliers SET SupplierName = @name, PhoneNo = @phone, MobilNo = @phone WHERE SupplierID = @id
     `, [
       { name: 'id', type: sql.Numeric(18, 0), value: id },
@@ -3869,6 +3954,7 @@ app.delete('/api/suppliers/:id', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const existing = await txQuery(tx, `
       SELECT SupplierID, ISNULL(SupplierName, N'') AS name, ISNULL(AccCode, N'') AS accCode
@@ -3882,7 +3968,7 @@ app.delete('/api/suppliers/:id', requireAuth, async (req, res) => {
       ) x
     `, [{ name: 'id', type: sql.Numeric(18, 0), value: id }]);
     if (blockers.recordset[0]) throw new Error(`لا يمكن حذف المورد لوجود ${blockers.recordset[0].reason}`);
-    await txQuery(tx, `DELETE FROM tblSuppliers WHERE SupplierID = @id`, [
+    txExec(tx, `DELETE FROM tblSuppliers WHERE SupplierID = @id`, [
       { name: 'id', type: sql.Numeric(18, 0), value: id }
     ]);
     await tryDeleteUnusedAccount(tx, existing.recordset[0].accCode);
@@ -3919,6 +4005,7 @@ app.post('/api/transfers', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   tx.opDay = opDay;
   try {
     const stockSnap = await stockBefore(tx, bodyProductIds(req.body));
@@ -3938,24 +4025,23 @@ app.post('/api/transfers', requireAuth, async (req, res) => {
       { name: 'notes', type: sql.NVarChar(250), value: notes }
     ]);
     const transferId = header.recordset[0].id;
+    const productIds = [...grouped.keys()];
+    const costs = await lockProductCosts(tx, productIds);
+    const stockRows = (await txQuery(tx, `
+      SELECT ProductID AS pid, ISNULL(ProductStock, 0) AS qty
+      FROM tblProductsStores WITH (UPDLOCK, HOLDLOCK)
+      WHERE StoreID = @store AND CompCode = 0 AND ProductID IN (${productIds.map((id, index) => `@p${index}`).join(', ')})
+    `, idInputs('p', productIds).concat([{ name: 'store', type: sql.Numeric(18, 0), value: fromStoreId }]))).recordset;
+    const availableBy = new Map(stockRows.map((row) => [Number(row.pid), Number(row.qty) || 0]));
     for (const [productId, qty] of grouped) {
-      await assertProduct(tx, productId);
-      const stock = await txQuery(tx, `
-        SELECT ISNULL(ProductStock, 0) AS qty
-        FROM tblProductsStores WITH (UPDLOCK, HOLDLOCK)
-        WHERE ProductID = @pid AND StoreID = @store AND CompCode = 0
-      `, [
-        { name: 'pid', type: sql.Numeric(18, 0), value: productId },
-        { name: 'store', type: sql.Numeric(18, 0), value: fromStoreId }
-      ]);
-      const available = stock.recordset[0] ? Number(stock.recordset[0].qty) : 0;
+      const available = availableBy.get(productId) || 0;
       if (available + 0.00001 < qty) throw new Error('الرصيد غير كاف في مخزن الخروج');
-      const cost = await latestCost(tx, productId);
+      const cost = costs.get(productId) || 0;
       const guid = crypto.randomUUID();
       await ensureStore(tx, productId, fromStoreId);
       await ensureStore(tx, productId, toStoreId);
       const movement = async (storeId, qtyIn, qtyOut, priceColumn) => {
-        await txQuery(tx, `
+        txExec(tx, `
           INSERT INTO tblInventory
             (InvoiceNo, InvoiceDate, DocumentDate, ProductID, StoreID, InQuantity, InBonus,
              OutQuantity, OutBonus, ${priceColumn}, Cost, TransactionID, CompCode, RowGUID)
@@ -3974,7 +4060,7 @@ app.post('/api/transfers', requireAuth, async (req, res) => {
       };
       await movement(fromStoreId, 0, qty, 'LotPricePerUnit');
       await movement(toStoreId, qty, 0, 'PurchasePricePerUnit');
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblStockTransferDetails
           (StockTransferID, ProductID, Quantity, RowGUID, InsertedDate, InsertedBy)
         VALUES (@id, @pid, @qty, @guid, GETDATE(), @actor)
@@ -4147,6 +4233,7 @@ app.post('/api/stocktakings', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   tx.opDay = opDay;
   try {
     const stockSnap = await stockBefore(tx, bodyProductIds(req.body));
@@ -4164,25 +4251,24 @@ app.post('/api/stocktakings', requireAuth, async (req, res) => {
     ]);
     const stockTakingId = header.recordset[0].id;
     let adjusted = 0;
+    const productIds = cleanLines.map((line) => line.productId);
+    const costs = await lockProductCosts(tx, productIds);
+    const bookRows = (await txQuery(tx, `
+      SELECT ps.ProductID AS pid, ISNULL(ps.ProductStock, 0) - ISNULL((
+        SELECT SUM(ISNULL(i.InQuantity, 0) + ISNULL(i.InBonus, 0) - ISNULL(i.OutQuantity, 0) - ISNULL(i.OutBonus, 0))
+        FROM tblInventory i
+        WHERE i.ProductID = ps.ProductID AND i.StoreID = @store AND i.CompCode = 0 AND i.InvoiceDate > ${OP_DAY}
+      ), 0) AS qty
+      FROM tblProductsStores ps WITH (UPDLOCK, HOLDLOCK)
+      WHERE ps.StoreID = @store AND ps.CompCode = 0 AND ps.ProductID IN (${productIds.map((id, index) => `@p${index}`).join(', ')})
+    `, idInputs('p', productIds).concat([{ name: 'store', type: sql.Numeric(18, 0), value: storeId }]))).recordset;
+    const bookBy = new Map(bookRows.map((row) => [Number(row.pid), Number(row.qty) || 0]));
     for (const line of cleanLines) {
-      await assertProduct(tx, line.productId);
       await ensureStore(tx, line.productId, storeId);
-      const stock = await txQuery(tx, `
-        SELECT ISNULL(ps.ProductStock, 0) - ISNULL((
-          SELECT SUM(ISNULL(i.InQuantity, 0) + ISNULL(i.InBonus, 0) - ISNULL(i.OutQuantity, 0) - ISNULL(i.OutBonus, 0))
-          FROM tblInventory i
-          WHERE i.ProductID = @pid AND i.StoreID = @store AND i.CompCode = 0 AND i.InvoiceDate > ${OP_DAY}
-        ), 0) AS qty
-        FROM tblProductsStores ps WITH (UPDLOCK, HOLDLOCK)
-        WHERE ps.ProductID = @pid AND ps.StoreID = @store AND ps.CompCode = 0
-      `, [
-        { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
-        { name: 'store', type: sql.Numeric(18, 0), value: storeId }
-      ]);
-      const bookQty = stock.recordset[0] ? Number(stock.recordset[0].qty) : 0;
+      const bookQty = bookBy.get(line.productId) || 0;
       const diffQty = roundTo(line.countedQty - bookQty, 5);
       const guid = crypto.randomUUID();
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblStockTakingDetails
           (StockTakingID, StoreID, ProductID, Quantity, ProductStock, CurStock, RowGUID, Notes, InsertedDate, InsertedBy)
         VALUES
@@ -4198,10 +4284,10 @@ app.post('/api/stocktakings', requireAuth, async (req, res) => {
       ]);
       if (Math.abs(diffQty) < 0.00001) continue;
       adjusted += 1;
-      const cost = await latestCost(tx, line.productId);
+      const cost = costs.get(line.productId) || 0;
       const qtyIn = diffQty > 0 ? diffQty : 0;
       const qtyOut = diffQty < 0 ? roundTo(-diffQty, 5) : 0;
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblInventory
           (InvoiceNo, InvoiceDate, DocumentDate, ProductID, StoreID, InQuantity, InBonus,
            OutQuantity, OutBonus, LotPricePerUnit, Cost, TransactionID, CompCode, RowGUID)
@@ -4306,7 +4392,7 @@ async function alignInventoryGuid(tx, detailTable, line, invoiceNo, transactionI
 async function writeJournalLines(tx, journalId, docNo, journalCode, rows) {
   for (let index = 0; index < rows.length; index += 1) {
     const line = rows[index];
-    await txQuery(tx, `
+    txExec(tx, `
       INSERT INTO tblJournalEntryDetails
         (Ser, JournalEntryID, AccountId, AccCode, JEPartyDis, Debit, Credit, CurrencyID, ExRate,
          DocNum, Journal, CompCode, PeriodCode, InsertedDate, InsertedBy)
@@ -4327,10 +4413,10 @@ async function writeJournalLines(tx, journalId, docNo, journalCode, rows) {
 }
 
 async function rebuildJournal(tx, journalId, total, description, docNo, journalCode, rows) {
-  await txQuery(tx, `DELETE FROM tblJournalEntryDetails WHERE JournalEntryID = @id`, [
+  txExec(tx, `DELETE FROM tblJournalEntryDetails WHERE JournalEntryID = @id`, [
     { name: 'id', type: sql.Numeric(18, 0), value: journalId }
   ]);
-  await txQuery(tx, `
+  txExec(tx, `
     UPDATE tblJournalEntry
     SET TotalDebit = @total, TotalCredit = @total, JournalEntryDis = @dis
     WHERE JournalEntryID = @id
@@ -4363,7 +4449,7 @@ async function moveInvoiceDate(tx, kind, invoiceId, invoiceNo, journalId, oldDay
     { name: 'oldDay', type: sql.NVarChar(10), value: oldDay || '' },
     { name: 'trx', type: sql.Int, value: t.trx }
   ];
-  await txQuery(tx, `
+  txExec(tx, `
     UPDATE ${t.head} SET ${t.date} = CAST(${OP_DAY} AS datetime) WHERE ${t.key} = @id;
     UPDATE ${t.detail} SET InventoryDate = ${OP_DAY} WHERE ${t.key} = @id;
     UPDATE tblJournalEntry SET JournalEntryDate = ${OP_STAMP} WHERE JournalEntryID = @journalId;
@@ -4384,7 +4470,7 @@ async function moveInvoiceDate(tx, kind, invoiceId, invoiceNo, journalId, oldDay
   `, inputs);
   // One row per statement: the old program's update trigger recalculates running stock row by row.
   for (const row of rows.recordset) {
-    await txQuery(tx, `UPDATE tblInventory SET InvoiceDate = ${OP_DAY}, DocumentDate = ${OP_DAY} WHERE ID = @invId`, [
+    txExec(tx, `UPDATE tblInventory SET InvoiceDate = ${OP_DAY}, DocumentDate = ${OP_DAY} WHERE ID = @invId`, [
       { name: 'invId', type: sql.Numeric(18, 0), value: row.id }
     ]);
   }
@@ -4446,18 +4532,55 @@ async function stockBefore(tx, productIds, detail) {
   return { products, before: await stockNet(tx, products) };
 }
 
+const triggerState = { at: 0, active: false };
+
 async function stockTriggersActive(tx) {
+  if (Date.now() - triggerState.at < 60000) return triggerState.active;
   const row = (await txQuery(tx, `
     SELECT COUNT(*) AS n FROM sys.triggers
     WHERE parent_id = OBJECT_ID('tblInventory') AND name IN ('trgInventoryInsert', 'trgInventoryDelete') AND is_disabled = 0
   `)).recordset[0];
-  return Number(row && row.n) === 2;
+  triggerState.active = Number(row && row.n) === 2;
+  triggerState.at = Date.now();
+  return triggerState.active;
+}
+
+async function stockAfterWithTriggers(tx, snap) {
+  const rows = (await txQuery(tx, `
+    SELECT n.pid, n.store, n.qty, ISNULL(ps.ProductStock, 0) AS stock,
+      ISNULL(p.ProductName, N'') AS name, ISNULL(s.StoreName, N'') AS storeName
+    FROM (
+      SELECT ProductID AS pid, StoreID AS store,
+        SUM(ISNULL(InQuantity, 0) + ISNULL(InBonus, 0) - ISNULL(OutQuantity, 0) - ISNULL(OutBonus, 0)) AS qty
+      FROM tblInventory WITH (UPDLOCK, HOLDLOCK)
+      WHERE ProductID IN (${snap.products.join(',')})
+      GROUP BY ProductID, StoreID
+    ) n
+    LEFT JOIN tblProductsStores ps ON ps.ProductID = n.pid AND ps.StoreID = n.store AND ps.CompCode = 0
+    LEFT JOIN tblProducts p ON p.ProductId = n.pid
+    LEFT JOIN tblStores s ON s.StoreID = n.store
+  `)).recordset;
+  const after = new Map(rows.map((row) => [`${row.pid}:${row.store}`, row]));
+  for (const key of new Set([...snap.before.keys(), ...after.keys()])) {
+    const row = after.get(key);
+    const delta = roundTo((row ? Number(row.qty) || 0 : 0) - (snap.before.get(key) || 0), 5);
+    if (delta >= 0) continue;
+    const balance = row ? Number(row.stock) || 0 : 0;
+    if (balance < -0.00001) {
+      const [productId, storeId] = key.split(':').map(Number);
+      const label = row.name || `صنف ${productId}`;
+      const where = row.storeName || `مخزن ${storeId}`;
+      throw new Error(`الرصيد لا يكفي: ${label} في ${where} — المتاح ${roundTo(Math.max(balance - delta, 0), 2)} والمطلوب ${roundTo(-delta, 2)}`);
+    }
+  }
 }
 
 // The old program's tblInventory triggers keep ProductStock; only apply the delta here when they are missing.
 async function stockAfter(tx, snap) {
-  const after = await stockNet(tx, snap.products);
+  if (!snap.products.length) return;
   const triggers = await stockTriggersActive(tx);
+  if (triggers) return stockAfterWithTriggers(tx, snap);
+  const after = await stockNet(tx, snap.products);
   for (const key of new Set([...snap.before.keys(), ...after.keys()])) {
     const delta = roundTo((after.get(key) || 0) - (snap.before.get(key) || 0), 5);
     if (!delta) continue;
@@ -4469,7 +4592,7 @@ async function stockAfter(tx, snap) {
     ];
     if (!triggers) {
       await ensureStore(tx, productId, storeId);
-      await txQuery(tx, `
+      txExec(tx, `
         UPDATE tblProductsStores
         SET ProductStock = ISNULL(ProductStock, 0) + @delta, PurchasedStock = ISNULL(PurchasedStock, 0) + @delta
         WHERE ProductID = @pid AND StoreID = @store AND CompCode = 0;
@@ -4496,7 +4619,7 @@ async function stockAfter(tx, snap) {
 }
 
 async function ensureStore(tx, productId, storeId) {
-  await txQuery(tx, `
+  txExec(tx, `
     IF NOT EXISTS (
       SELECT 1 FROM tblProductsStores WITH (UPDLOCK, HOLDLOCK)
       WHERE ProductID = @pid AND StoreID = @store AND CompCode = 0
@@ -4521,6 +4644,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const stockSnap = await stockBefore(tx, bodyProductIds(req.body), { table: 'tblSellingInvoicesDetails', key: 'SellingInvoiceID', id: invoiceId });
     const headerRow = await txQuery(tx, `
@@ -4537,7 +4661,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
     tx.opDay = parseOpDay(req.body.date, header.day);
     const existingRows = await txQuery(tx, `
       SELECT id AS lineId, ProductID AS productId, StoreID AS storeId, OutQuantity AS qty,
-        ISNULL(ReturnedQuantity, 0) AS returned, RowGuid AS rowGuid
+        ISNULL(ReturnedQuantity, 0) AS returned, RowGuid AS rowGuid, ISNULL(LotPricePerUnit, 0) AS price
       FROM tblSellingInvoicesDetails WITH (UPDLOCK, HOLDLOCK) WHERE SellingInvoiceID = @id
     `, [{ name: 'id', type: sql.Numeric(18, 0), value: invoiceId }]);
     const existing = existingRows.recordset;
@@ -4579,8 +4703,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
     const dueAccount = due > 0.0001 && clientId ? await accountByCode(tx, client.accCode) : cashClearing;
     await assertStores(tx, parsed.lines.map((line) => line.storeId));
     const plan = planLines(existing, parsed.lines);
-    for (const line of plan.deletes.concat(plan.updates)) await assertProduct(tx, line.productId);
-    for (const line of plan.inserts) await assertProduct(tx, line.productId);
+    await assertProducts(tx, plan.deletes.concat(plan.updates, plan.inserts).map((line) => line.productId));
     for (const line of plan.deletes) {
       await alignInventoryGuid(tx, 'tblSellingInvoicesDetails', line, header.no, 2, 'OutQuantity', 'ClientID', header.clientId);
       const removed = await txQuery(tx, `DELETE FROM tblSellingInvoicesDetails WHERE id = @lineId AND SellingInvoiceID = @id`, [
@@ -4590,6 +4713,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
       assertOne(removed, 'تعذر حذف صنف من الفاتورة');
     }
     for (const line of plan.updates) {
+      if (line.unchanged && Number(client.ClientId || 0) === Number(header.clientId || 0)) continue;
       const inventoryId = await alignInventoryGuid(tx, 'tblSellingInvoicesDetails', {
         lineId: line.lineId, productId: line.productId, storeId: line.oldStore, qty: line.oldQty
       }, header.no, 2, 'OutQuantity', 'ClientID', header.clientId);
@@ -4625,7 +4749,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
       const cost = await latestCost(tx, line.productId);
       const guid = crypto.randomUUID();
       await ensureStore(tx, line.productId, line.storeId);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblInventory
           (InvoiceNo, InvoiceDate, DocumentDate, ProductID, ClientID, StoreID, InQuantity, InBonus,
            OutQuantity, OutBonus, LotPricePerUnit, TotalLotPrice, Cost, TransactionID, CompCode, RowGUID)
@@ -4643,7 +4767,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
         { name: 'cost', type: sql.Numeric(18, 4), value: cost },
         { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblSellingInvoicesDetails
           (SellingInvoiceID, ProductID, OutQuantity, OutBonus, UnitId, StockQty, ReturnedQuantity,
            ReturnedStockQty, StoreID, LotPricePerUnit, SellingPricePerUnit, TotalPrice, DiscountType,
@@ -4665,26 +4789,26 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
       ]);
     }
     if (payment && paid <= 0.0001) {
-      await txQuery(tx, `DELETE FROM tblSellingInvoicesCollectingDetails WHERE SellingInvoiceID = @id`, [
+      txExec(tx, `DELETE FROM tblSellingInvoicesCollectingDetails WHERE SellingInvoiceID = @id`, [
         { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
       ]);
       if (payment.safeJournalId) {
-        await txQuery(tx, `DELETE FROM tblJournalEntryDetails WHERE JournalEntryID = @id`, [
+        txExec(tx, `DELETE FROM tblJournalEntryDetails WHERE JournalEntryID = @id`, [
           { name: 'id', type: sql.Numeric(18, 0), value: payment.safeJournalId }
         ]);
       }
       if (payment.safeId) {
-        await txQuery(tx, `DELETE FROM tblSafeOperations WHERE OperationID = @id`, [
+        txExec(tx, `DELETE FROM tblSafeOperations WHERE OperationID = @id`, [
           { name: 'id', type: sql.Numeric(18, 0), value: payment.safeId }
         ]);
       }
       if (payment.safeJournalId) {
-        await txQuery(tx, `DELETE FROM tblJournalEntry WHERE JournalEntryID = @id`, [
+        txExec(tx, `DELETE FROM tblJournalEntry WHERE JournalEntryID = @id`, [
           { name: 'id', type: sql.Numeric(18, 0), value: payment.safeJournalId }
         ]);
       }
     }
-    await txQuery(tx, `
+    txExec(tx, `
       UPDATE tblSellingInvoice SET ClientID = @clientId, SellingInvoiceTypeId = @typeId, TotalProductsPrice = @gross,
         DiscountType = @dtype, DiscountAmount = @discount, TotalDiscountAmount = @discount,
         TaxbaseAmount = @net, SellingInvoiceTotalAmount = @net, TotalCollectedAmount = @paid
@@ -4701,7 +4825,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
     ]);
     const saleText = `فاتورة بيع رقم (${header.no})`;
     if (payment && paid > 0.0001) {
-      await txQuery(tx, `
+      txExec(tx, `
         UPDATE tblSellingInvoicesCollectingDetails
         SET SellingInvoiceTotalAmount = @total, Collected = @paid, TotalCollectedAmount = @paid
         WHERE SellingInvoiceID = @id
@@ -4711,7 +4835,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
         { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
       ]);
       if (payment.safeId) {
-        await txQuery(tx, `
+        txExec(tx, `
           UPDATE tblSafeOperations SET SafeOperationTotalAmount = @paid, AdjustedAmount = @paid, ClientID = @clientId
           WHERE OperationID = @id
         `, [
@@ -4728,8 +4852,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
         ]);
       }
     } else if (!payment && paid > 0.0001) {
-      const safeNo = await nextNumber(tx, 'tblSafeOperations', 'SafeOperationDocumentNo');
-      const safeJournalNo = await nextNumber(tx, 'tblJournalEntry', 'JournalEntryNo');
+      const [safeNo, safeJournalNo] = await nextNumbers(tx, [['tblSafeOperations', 'SafeOperationDocumentNo'], ['tblJournalEntry', 'JournalEntryNo']]);
       const safeText = `تحصيل ${saleText}`;
       const safeJournal = await txQuery(tx, `
         INSERT INTO tblJournalEntry
@@ -4760,7 +4883,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
         { name: 'clientId', type: sql.Numeric(18, 0), value: client.ClientId || 0 },
         { name: 'journalId', type: sql.Numeric(18, 0), value: safeJournal.recordset[0].id }
       ]);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblSellingInvoicesCollectingDetails
           (SellingInvoiceID, ClientID, SellingInvoiceTotalAmount, Collected, TotalCollectedAmount, OnCollectDiscount, TotalOnCollectDiscount, SafeOperationID)
         VALUES (@invoiceId, @clientId, @total, @paid, @paid, 0, 0, @safeId)
@@ -4805,6 +4928,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const stockSnap = await stockBefore(tx, bodyProductIds(req.body), { table: 'tblPurchaseInvoicesDetails', key: 'PurchaseInvoiceID', id: invoiceId });
     const headerRow = await txQuery(tx, `
@@ -4821,7 +4945,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
     tx.opDay = parseOpDay(req.body.date, header.day);
     const existingRows = await txQuery(tx, `
       SELECT Id AS lineId, ProductID AS productId, StoreID AS storeId, InQuantity AS qty,
-        ISNULL(ReturnedQuantity, 0) AS returned, RowGuid AS rowGuid
+        ISNULL(ReturnedQuantity, 0) AS returned, RowGuid AS rowGuid, ISNULL(PurchasePrice, 0) AS price
       FROM tblPurchaseInvoicesDetails WITH (UPDLOCK, HOLDLOCK) WHERE PurchaseInvoiceID = @id
     `, [{ name: 'id', type: sql.Numeric(18, 0), value: invoiceId }]);
     const existing = existingRows.recordset;
@@ -4862,7 +4986,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
     const counterAccount = await accountByCode(tx, counterCode);
     await assertStores(tx, parsed.lines.map((line) => line.storeId));
     const plan = planLines(existing, parsed.lines);
-    for (const line of plan.deletes.concat(plan.updates, plan.inserts)) await assertProduct(tx, line.productId);
+    await assertProducts(tx, plan.deletes.concat(plan.updates, plan.inserts).map((line) => line.productId));
     for (const line of plan.deletes) {
       await alignInventoryGuid(tx, 'tblPurchaseInvoicesDetails', line, header.no, 1, 'InQuantity', 'SupplierID', header.supplierId);
       const removed = await txQuery(tx, `DELETE FROM tblPurchaseInvoicesDetails WHERE Id = @lineId AND PurchaseInvoiceID = @id`, [
@@ -4872,6 +4996,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
       assertOne(removed, 'تعذر حذف صنف من الفاتورة');
     }
     for (const line of plan.updates) {
+      if (line.unchanged && Number(supplier.SupplierID || 0) === Number(header.supplierId || 0)) continue;
       const inventoryId = await alignInventoryGuid(tx, 'tblPurchaseInvoicesDetails', {
         lineId: line.lineId, productId: line.productId, storeId: line.oldStore, qty: line.oldQty
       }, header.no, 1, 'InQuantity', 'SupplierID', header.supplierId);
@@ -4904,7 +5029,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
     for (const line of plan.inserts) {
       const guid = crypto.randomUUID();
       await ensureStore(tx, line.productId, line.storeId);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblInventory
           (InvoiceNo, InvoiceDate, DocumentDate, ProductID, SupplierID, StoreID, InQuantity, InBonus,
            OutQuantity, OutBonus, PurchasePricePerUnit, Cost, TransactionID, CompCode, RowGUID)
@@ -4920,7 +5045,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
         { name: 'price', type: sql.Numeric(18, 4), value: line.price },
         { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblPurchaseInvoicesDetails
           (PurchaseInvoiceID, ProductID, InQuantity, InBonus, UnitId, StockQty, ReturnedQuantity,
            ReturnedStockQty, StoreID, PurchasePrice, TotalPrice, DiscountType, DiscountRatio, DiscountAmount,
@@ -4940,26 +5065,26 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
       ]);
     }
     if (payment && paid <= 0.0001) {
-      await txQuery(tx, `DELETE FROM tblPurchaseInvoicesPayingDetails WHERE PurchaseInvoiceID = @id`, [
+      txExec(tx, `DELETE FROM tblPurchaseInvoicesPayingDetails WHERE PurchaseInvoiceID = @id`, [
         { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
       ]);
       if (payment.safeJournalId) {
-        await txQuery(tx, `DELETE FROM tblJournalEntryDetails WHERE JournalEntryID = @id`, [
+        txExec(tx, `DELETE FROM tblJournalEntryDetails WHERE JournalEntryID = @id`, [
           { name: 'id', type: sql.Numeric(18, 0), value: payment.safeJournalId }
         ]);
       }
       if (payment.safeId) {
-        await txQuery(tx, `DELETE FROM tblSafeOperations WHERE OperationID = @id`, [
+        txExec(tx, `DELETE FROM tblSafeOperations WHERE OperationID = @id`, [
           { name: 'id', type: sql.Numeric(18, 0), value: payment.safeId }
         ]);
       }
       if (payment.safeJournalId) {
-        await txQuery(tx, `DELETE FROM tblJournalEntry WHERE JournalEntryID = @id`, [
+        txExec(tx, `DELETE FROM tblJournalEntry WHERE JournalEntryID = @id`, [
           { name: 'id', type: sql.Numeric(18, 0), value: payment.safeJournalId }
         ]);
       }
     }
-    await txQuery(tx, `
+    txExec(tx, `
       UPDATE tblPurchaseInvoice SET SupplierID = @supplierId, PurchaseInvoiceTypeId = @typeId, TotalProductsPrice = @gross,
         DiscountType = @dtype, DiscountAmount = @discount, TotalDiscountAmount = @discount,
         TaxbaseAmount = @net, PurchaseInvoiceTotalAmount = @net, TotalPaiedAmount = @paid
@@ -4976,7 +5101,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
     ]);
     const purchaseText = `فاتورة شراء رقم (${header.no})`;
     if (payment && paid > 0.0001) {
-      await txQuery(tx, `
+      txExec(tx, `
         UPDATE tblPurchaseInvoicesPayingDetails
         SET PurchaseInvoiceTotalAmount = @total, Paied = @paid, TotalPaiedAmount = @paid
         WHERE PurchaseInvoiceID = @id
@@ -4986,7 +5111,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
         { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
       ]);
       if (payment.safeId) {
-        await txQuery(tx, `
+        txExec(tx, `
           UPDATE tblSafeOperations SET SafeOperationTotalAmount = @paid, AdjustedAmount = @paid, SupplierID = @supplierId
           WHERE OperationID = @id
         `, [
@@ -5003,8 +5128,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
         ]);
       }
     } else if (!payment && paid > 0.0001) {
-      const safeNo = await nextNumber(tx, 'tblSafeOperations', 'SafeOperationDocumentNo');
-      const safeJournalNo = await nextNumber(tx, 'tblJournalEntry', 'JournalEntryNo');
+      const [safeNo, safeJournalNo] = await nextNumbers(tx, [['tblSafeOperations', 'SafeOperationDocumentNo'], ['tblJournalEntry', 'JournalEntryNo']]);
       const safeText = `سداد ${purchaseText}`;
       const safeJournal = await txQuery(tx, `
         INSERT INTO tblJournalEntry
@@ -5035,7 +5159,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
         { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
         { name: 'journalId', type: sql.Numeric(18, 0), value: safeJournal.recordset[0].id }
       ]);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblPurchaseInvoicesPayingDetails
           (PurchaseInvoiceID, SupplierID, PurchaseInvoiceTotalAmount, Paied, TotalPaiedAmount, OnPaiedDiscount, TotalOnPaiedDiscount, SafeOperationID)
         VALUES (@invoiceId, @supplierId, @total, @paid, @paid, 0, 0, @safeId)
@@ -5077,6 +5201,7 @@ app.post('/api/sales/:id/return', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const stockSnap = await stockBefore(tx, [], { table: 'tblSellingInvoicesDetails', key: 'SellingInvoiceID', id: invoiceId });
     const header = (await txQuery(tx, `
@@ -5116,7 +5241,7 @@ app.post('/api/sales/:id/return', requireAuth, async (req, res) => {
     const refund = Math.max(0, Math.round((invoiceTotal - room) * 10000) / 10000);
     if (refund > Number(header.collected) + 0.00001) throw new Error('قيمة المرتجع أكبر من المتاح على الفاتورة');
     if (refund > 0) {
-      await txQuery(tx, `
+      txExec(tx, `
         UPDATE tblSellingInvoice SET TotalCollectedAmount = TotalCollectedAmount - @refund WHERE SellingInvoiceID = @id
       `, [
         { name: 'refund', type: sql.Numeric(18, 4), value: refund },
@@ -5136,8 +5261,7 @@ app.post('/api/sales/:id/return', requireAuth, async (req, res) => {
       if (existing) existing.amount += part.amount;
       else creditAccounts.push({ account, amount: part.amount });
     }
-    const returnNo = await nextNumber(tx, 'tblReturnSellPermission', 'ReturnSellPermissionNo');
-    const journalNo = await nextNumber(tx, 'tblJournalEntry', 'JournalEntryNo');
+    const [returnNo, journalNo] = await nextNumbers(tx, [['tblReturnSellPermission', 'ReturnSellPermissionNo'], ['tblJournalEntry', 'JournalEntryNo']]);
     const description = clip(`اذن مردودات مبيعات رقم (${returnNo}) مرتجع فاتورة رقم (${header.no})`, 200);
     const journal = await txQuery(tx, `
       INSERT INTO tblJournalEntry
@@ -5157,7 +5281,7 @@ app.post('/api/sales/:id/return', requireAuth, async (req, res) => {
     ];
     for (let index = 0; index < journalLines.length; index += 1) {
       const line = journalLines[index];
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblJournalEntryDetails
           (Ser, JournalEntryID, AccountId, AccCode, JEPartyDis, Debit, Credit, CurrencyID, ExRate,
            DocNum, Journal, CompCode, PeriodCode, InsertedDate, InsertedBy)
@@ -5195,7 +5319,7 @@ app.post('/api/sales/:id/return', requireAuth, async (req, res) => {
     for (const line of clean) {
       const guid = crypto.randomUUID();
       await ensureStore(tx, line.productId, line.storeId);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblInventory
           (InvoiceNo, InvoiceDate, DocumentDate, ProductID, ClientID, StoreID, InQuantity, InBonus,
            OutQuantity, OutBonus, LotPricePerUnit, Cost, TransactionID, CompCode, RowGUID)
@@ -5212,7 +5336,7 @@ app.post('/api/sales/:id/return', requireAuth, async (req, res) => {
         { name: 'cost', type: sql.Numeric(18, 4), value: line.cost },
         { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblReturnSellPermissionDetails
           (ReturnSellPermissionID, ProductID, InQuantity, InBonus, StoreID, UnitId, StockQty, LotPricePerUnit,
            TotalPrice, DiscountType, DiscountRatio, DiscountAmount, TotalPriceAfterDiscount, SalesTaxRatio,
@@ -5236,8 +5360,7 @@ app.post('/api/sales/:id/return', requireAuth, async (req, res) => {
     if (refund > 0) {
       const safeAccount = await accountByCode(tx, '12601');
       const clearing = await accountByCode(tx, '1221010001');
-      const safeNo = await nextNumber(tx, 'tblSafeOperations', 'SafeOperationDocumentNo');
-      const safeJournalNo = await nextNumber(tx, 'tblJournalEntry', 'JournalEntryNo');
+      const [safeNo, safeJournalNo] = await nextNumbers(tx, [['tblSafeOperations', 'SafeOperationDocumentNo'], ['tblJournalEntry', 'JournalEntryNo']]);
       const safeText = `رد مرتجع مبيعات رقم (${returnNo})`;
       const safeJournal = await txQuery(tx, `
         INSERT INTO tblJournalEntry
@@ -5257,7 +5380,7 @@ app.post('/api/sales/:id/return', requireAuth, async (req, res) => {
       ];
       for (let index = 0; index < safeLines.length; index += 1) {
         const line = safeLines[index];
-        await txQuery(tx, `
+        txExec(tx, `
           INSERT INTO tblJournalEntryDetails
             (Ser, JournalEntryID, AccountId, AccCode, JEPartyDis, Debit, Credit, CurrencyID, ExRate,
              DocNum, Journal, CompCode, PeriodCode, InsertedDate, InsertedBy)
@@ -5273,7 +5396,7 @@ app.post('/api/sales/:id/return', requireAuth, async (req, res) => {
           { name: 'doc', type: sql.Numeric(18, 0), value: safeNo }
         ]);
       }
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblSafeOperations
           (SafeOperationTypeID, SafeOperationTotalAmount, CurrencyID, ExRate, Discount,
            SafeOperationDate, SafeOperationDocumentNo, OperationDescription, ClientID, Cash, Cheques,
@@ -5307,6 +5430,7 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
   const tx = new sql.Transaction(pool);
   await tx.begin();
   tx.actor = actorName(req);
+  tx.label = `${req.method} ${req.path}`;
   try {
     const stockSnap = await stockBefore(tx, [], { table: 'tblPurchaseInvoicesDetails', key: 'PurchaseInvoiceID', id: invoiceId });
     const header = (await txQuery(tx, `
@@ -5345,7 +5469,7 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
     const refund = Math.max(0, Math.round((invoiceTotal - room) * 10000) / 10000);
     if (refund > Number(header.paid) + 0.00001) throw new Error('قيمة المرتجع أكبر من المتاح على الفاتورة');
     if (refund > 0) {
-      await txQuery(tx, `
+      txExec(tx, `
         UPDATE tblPurchaseInvoice SET TotalPaiedAmount = TotalPaiedAmount - @refund WHERE PurchaseInvoiceID = @id
       `, [
         { name: 'refund', type: sql.Numeric(18, 4), value: refund },
@@ -5365,8 +5489,7 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
       if (existing) existing.amount += part.amount;
       else debitAccounts.push({ account, amount: part.amount });
     }
-    const returnNo = await nextNumber(tx, 'tblReturnPurchasePermission', 'ReturnPurchasePermissionNo');
-    const journalNo = await nextNumber(tx, 'tblJournalEntry', 'JournalEntryNo');
+    const [returnNo, journalNo] = await nextNumbers(tx, [['tblReturnPurchasePermission', 'ReturnPurchasePermissionNo'], ['tblJournalEntry', 'JournalEntryNo']]);
     const description = clip(`اذن مردودات مشتريات رقم (${returnNo}) مرتجع فاتورة رقم (${header.no})`, 200);
     const journal = await txQuery(tx, `
       INSERT INTO tblJournalEntry
@@ -5386,7 +5509,7 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
     ];
     for (let index = 0; index < journalLines.length; index += 1) {
       const line = journalLines[index];
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblJournalEntryDetails
           (Ser, JournalEntryID, AccountId, AccCode, JEPartyDis, Debit, Credit, CurrencyID, ExRate,
            DocNum, Journal, CompCode, PeriodCode, InsertedDate, InsertedBy)
@@ -5424,7 +5547,7 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
     for (const line of clean) {
       const guid = crypto.randomUUID();
       await ensureStore(tx, line.productId, line.storeId);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblInventory
           (InvoiceNo, InvoiceDate, DocumentDate, ProductID, SupplierID, StoreID, InQuantity, InBonus,
            OutQuantity, OutBonus, LotPricePerUnit, Cost, TransactionID, CompCode, RowGUID)
@@ -5441,7 +5564,7 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
         { name: 'cost', type: sql.Numeric(18, 4), value: line.cost },
         { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblReturnPurchasePermissionDetails
           (ReturnPurchasePermissionID, ProductID, OutQuantity, OutBonus, StoreID, UnitId, StockQty, PurchasePrice,
            TotalPrice, DiscountType, DiscountRatio, DiscountAmount, TotalPriceAfterDiscount, SalesTaxRatio,
@@ -5465,8 +5588,7 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
     if (refund > 0) {
       const safeAccount = await accountByCode(tx, '12601');
       const clearing = await accountByCode(tx, '2423');
-      const safeNo = await nextNumber(tx, 'tblSafeOperations', 'SafeOperationDocumentNo');
-      const safeJournalNo = await nextNumber(tx, 'tblJournalEntry', 'JournalEntryNo');
+      const [safeNo, safeJournalNo] = await nextNumbers(tx, [['tblSafeOperations', 'SafeOperationDocumentNo'], ['tblJournalEntry', 'JournalEntryNo']]);
       const safeText = `رد مرتجع مشتريات رقم (${returnNo})`;
       const safeJournal = await txQuery(tx, `
         INSERT INTO tblJournalEntry
@@ -5486,7 +5608,7 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
       ];
       for (let index = 0; index < safeLines.length; index += 1) {
         const line = safeLines[index];
-        await txQuery(tx, `
+        txExec(tx, `
           INSERT INTO tblJournalEntryDetails
             (Ser, JournalEntryID, AccountId, AccCode, JEPartyDis, Debit, Credit, CurrencyID, ExRate,
              DocNum, Journal, CompCode, PeriodCode, InsertedDate, InsertedBy)
@@ -5502,7 +5624,7 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
           { name: 'doc', type: sql.Numeric(18, 0), value: safeNo }
         ]);
       }
-      await txQuery(tx, `
+      txExec(tx, `
         INSERT INTO tblSafeOperations
           (SafeOperationTypeID, SafeOperationTotalAmount, CurrencyID, ExRate, Discount,
            SafeOperationDate, SafeOperationDocumentNo, OperationDescription, SupplierID, Cash, Cheques,

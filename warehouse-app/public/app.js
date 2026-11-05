@@ -350,6 +350,53 @@ function selectedRow() {
   return content.querySelector('.data-row.selected');
 }
 
+// Runs the screen's own search button while typing. Searches run one at a time so the rows on
+// screen always belong to the text in the box; Enter picks the first row only when that holds.
+function liveSearch(inputId, buttonId, resultsId, enterFrom = []) {
+  const input = document.getElementById(inputId);
+  const button = document.getElementById(buttonId);
+  if (!input || !button) return;
+  let timer = null;
+  let busy = false;
+  let again = false;
+  let shownFor = null;
+  const rows = () => document.querySelectorAll(`#${resultsId} .data-row`);
+  const run = async (pickSingle) => {
+    clearTimeout(timer);
+    timer = null;
+    if (busy) { again = true; return; }
+    busy = true;
+    shownFor = null;
+    const query = input.value.trim();
+    try { if (button.onclick) await button.onclick(); } catch (error) { /* the handler shows its own errors */ }
+    busy = false;
+    if (again) { again = false; run(pickSingle); return; }
+    shownFor = query;
+    if (pickSingle && input.value.trim() === query && rows().length === 1) rows()[0].click();
+  };
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    shownFor = null;
+    if (!input.value.trim()) {
+      const box = document.getElementById(resultsId);
+      if (box) box.innerHTML = '';
+      return;
+    }
+    timer = setTimeout(() => run(false), 350);
+  });
+  const onEnter = (event) => {
+    if (event.key !== 'Enter' || !input.value.trim()) return;
+    event.preventDefault();
+    if (!timer && !busy && shownFor === input.value.trim() && rows().length) rows()[0].click();
+    else run(true);
+  };
+  input.addEventListener('keydown', onEnter);
+  for (const id of enterFrom) {
+    const extra = document.getElementById(id);
+    if (extra) extra.addEventListener('keydown', onEnter);
+  }
+}
+
 function focusQuery() {
   const input = content.querySelector('#q, #productQ, #clientQ, #partyQ, .toolbar input:not([type="number"]):not([type="date"])');
   if (!input) return;
@@ -2707,6 +2754,7 @@ function renderTransfer() {
     });
   };
   draw();
+  liveSearch('productQ', 'findProduct', 'productResults', ['lineQty', 'linePrice', 'countedQty']);
   document.getElementById('findProduct').onclick = async () => {
     const q = document.getElementById('productQ').value.trim();
     const data = await api('/api/products?q=' + encodeURIComponent(q) + '&page=1&pageSize=8');
@@ -2827,6 +2875,7 @@ function renderStocktake() {
       error.textContent = err.message;
     }
   };
+  liveSearch('productQ', 'findProduct', 'productResults', ['lineQty', 'linePrice', 'countedQty']);
   document.getElementById('findProduct').onclick = async () => {
     const error = document.getElementById('stocktakeError');
     error.textContent = '';
@@ -3198,12 +3247,55 @@ function renderNewSale() {
       <p class="note">${editing ? 'حفظ التعديل يغيّر أصناف الفاتورة والمخزون والقيد على قاعدة البيانات الفعلية.' : 'الحفظ ينزل على قاعدة البيانات الفعلية: فاتورة، أصناف، مخزون، قيد، وتحصيل نقدي لو تم اختياره.'}</p>
       <div id="saleError" class="error"></div>
     </div>`;
+  const avail = new Map();
+  const availKey = (line) => `${line.productId}:${Number(line.storeId)}`;
+  const needed = () => {
+    const need = new Map();
+    for (const line of draft.lines) need.set(availKey(line), (need.get(availKey(line)) || 0) + (Number(line.qty) || 0));
+    return need;
+  };
+  const shortages = () => {
+    const need = needed();
+    const seen = new Set();
+    const out = [];
+    for (const line of draft.lines) {
+      const key = availKey(line);
+      if (seen.has(key) || !avail.has(key)) continue;
+      seen.add(key);
+      if (need.get(key) > avail.get(key) + 0.00001) out.push(`${line.name}: المتاح ${num(avail.get(key))} والمطلوب ${num(need.get(key))}`);
+    }
+    return out;
+  };
+  const paintAvail = () => {
+    const need = needed();
+    document.querySelectorAll('.line-avail').forEach((el) => {
+      const line = draft.lines[Number(el.dataset.i)];
+      if (!line) return;
+      const key = availKey(line);
+      el.textContent = avail.has(key) ? `المتاح ${num(avail.get(key))}` : '';
+      el.classList.toggle('short', avail.has(key) && need.get(key) > avail.get(key) + 0.00001);
+    });
+  };
+  const loadAvail = async () => {
+    if (editing) return;
+    const missing = [...new Set(draft.lines.map(availKey))].filter((key) => !avail.has(key));
+    await Promise.all(missing.map(async (key) => {
+      const [productId, storeId] = key.split(':');
+      try {
+        const balance = await api(`/api/stock/balance?productId=${productId}&storeId=${storeId}`);
+        avail.set(key, Number(balance.qty || 0));
+      } catch (error) { /* the server still checks on save */ }
+    }));
+    paintAvail();
+  };
   const drawLines = () => {
     const total = draft.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
     document.getElementById('draftLines').innerHTML = draft.lines.map((line, index) =>
-      `<div class="data-row"><span data-label="الصنف">${esc(line.name)}</span><span data-label="رقم الصنف">${esc(line.productId || '')}</span><span data-label="الكود">${esc(line.code || '')}</span><span data-label="المخزن"><select data-i="${index}" class="line-store">${storeOptions(line.storeId)}</select></span><span data-label="الكمية"><input class="line-qty" data-i="${index}" type="number" min="0.01" step="0.01" value="${line.qty}"></span><span data-label="السعر"><input class="line-price" data-i="${index}" type="number" min="0" step="0.01" value="${line.price}"></span><span data-label="الإجمالي" class="line-sum">${money(line.qty * line.price)}</span><span data-label="حذف"><button type="button" data-i="${index}" class="ghost remove-line">حذف</button></span></div>`
+      `<div class="data-row"><span data-label="الصنف">${esc(line.name)}</span><span data-label="رقم الصنف">${esc(line.productId || '')}</span><span data-label="الكود">${esc(line.code || '')}</span><span data-label="المخزن"><select data-i="${index}" class="line-store">${storeOptions(line.storeId)}</select></span><span data-label="الكمية"><input class="line-qty" data-i="${index}" type="number" min="0.01" step="0.01" value="${line.qty}">${editing ? '' : `<small class="line-avail" data-i="${index}"></small>`}</span><span data-label="السعر"><input class="line-price" data-i="${index}" type="number" min="0" step="0.01" value="${line.price}"></span><span data-label="الإجمالي" class="line-sum">${money(line.qty * line.price)}</span><span data-label="حذف"><button type="button" data-i="${index}" class="ghost remove-line">حذف</button></span></div>`
     ).join('') || '<div class="empty">لم تُضف أصناف</div>';
     showDraftTotal(draft, 'saleDiscount', total);
+    paintAvail();
+    loadAvail();
     document.querySelectorAll('.line-qty, .line-price').forEach((input) => {
       input.oninput = () => {
         readLineInputs(draft.lines);
@@ -3212,10 +3304,11 @@ function renderNewSale() {
         row.querySelector('.line-sum').textContent = money(line.qty * line.price);
         const next = draft.lines.reduce((sum, item) => sum + item.qty * item.price, 0);
         showDraftTotal(draft, 'saleDiscount', next);
+        paintAvail();
       };
     });
     document.querySelectorAll('.line-store').forEach((input) => {
-      input.onchange = () => readLineInputs(draft.lines);
+      input.onchange = () => { readLineInputs(draft.lines); paintAvail(); loadAvail(); };
     });
     document.querySelectorAll('.remove-line').forEach((button) => {
       button.onclick = () => { readLineInputs(draft.lines); draft.lines.splice(Number(button.dataset.i), 1); drawLines(); };
@@ -3229,6 +3322,7 @@ function renderNewSale() {
     const total = draft.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
     showDraftTotal(draft, 'saleDiscount', total);
   };
+  liveSearch('clientQ', 'findClient', 'clientResults');
   document.getElementById('findClient').onclick = async () => {
     const q = document.getElementById('clientQ').value.trim();
     const data = await api('/api/clients?q=' + encodeURIComponent(q) + '&page=1&pageSize=8');
@@ -3251,15 +3345,16 @@ function renderNewSale() {
       };
     });
   };
+  liveSearch('productQ', 'findProduct', 'productResults', ['lineQty', 'linePrice', 'countedQty']);
   document.getElementById('findProduct').onclick = async () => {
     const q = document.getElementById('productQ').value.trim();
     const data = await api('/api/products?q=' + encodeURIComponent(q) + '&page=1&pageSize=8');
     document.getElementById('productResults').innerHTML = grid(
-      [{ label: 'رقم الصنف', width: '0.7fr' }, { label: 'الكود', width: '0.8fr' }, { label: 'الصنف', width: '1.4fr' }, { label: 'آخر سعر', width: '1fr' }],
+      [{ label: 'رقم الصنف', width: '0.7fr' }, { label: 'الكود', width: '0.8fr' }, { label: 'الصنف', width: '1.4fr' }, { label: 'الرصيد', width: '0.6fr' }, { label: 'آخر سعر', width: '1fr' }],
       data.rows.map((row) => ({
         clickable: true,
         attrs: `data-id="${row.id}" data-code="${esc(row.code)}" data-name="${esc(row.name)}" data-price="${Number(row.salePrice || 0)}" data-last="${Number(row.lastSalePrice || 0)}"`,
-        cells: [esc(row.id), esc(row.code), esc(row.name), formatLastPrice(row.lastSalePrice, 'sale')]
+        cells: [esc(row.id), esc(row.code), esc(row.name), num(row.stock), formatLastPrice(row.lastSalePrice, 'sale')]
       }))
     );
     document.querySelectorAll('#productResults .data-row').forEach((row) => {
@@ -3311,6 +3406,11 @@ function renderNewSale() {
     const button = document.getElementById('saveSale');
     document.getElementById('saleError').textContent = '';
     readLineInputs(draft.lines);
+    const short = editing ? [] : shortages();
+    if (short.length) {
+      document.getElementById('saleError').textContent = `الكمية أكبر من المتاح — ${short.join(' · ')}`;
+      return;
+    }
     button.disabled = true;
     const editingNow = Boolean(draft.editId);
     const headerStore = defaultLineStore('saleStore', draft.storeId);
@@ -3338,7 +3438,7 @@ function renderNewSale() {
       state.page = 1;
       state.q = '';
       await openSection('sales', { force: true });
-      await openInvoice('sales', result.id);
+      await openInvoice('sales', result.id, { justSaved: !editingNow });
     } catch (error) {
       document.getElementById('saleError').textContent = error.message;
       button.disabled = false;
@@ -3419,6 +3519,7 @@ function renderNewPurchase() {
     const total = purchaseDraft.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
     showDraftTotal(purchaseDraft, 'purchaseDiscount', total);
   };
+  liveSearch('supplierQ', 'findSupplier', 'supplierResults');
   document.getElementById('findSupplier').onclick = async () => {
     const q = document.getElementById('supplierQ').value.trim();
     const data = await api('/api/suppliers?q=' + encodeURIComponent(q) + '&page=1&pageSize=8');
@@ -3441,6 +3542,7 @@ function renderNewPurchase() {
       };
     });
   };
+  liveSearch('productQ', 'findProduct', 'productResults', ['lineQty', 'linePrice', 'countedQty']);
   document.getElementById('findProduct').onclick = async () => {
     const q = document.getElementById('productQ').value.trim();
     const data = await api('/api/products?q=' + encodeURIComponent(q) + '&page=1&pageSize=8');
@@ -3528,7 +3630,7 @@ function renderNewPurchase() {
       state.page = 1;
       state.q = '';
       await openSection('purchases', { force: true });
-      await openInvoice('purchases', result.id);
+      await openInvoice('purchases', result.id, { justSaved: !editingNow });
     } catch (error) {
       document.getElementById('purchaseError').textContent = error.message;
       button.disabled = false;
@@ -3692,6 +3794,7 @@ async function openInvoice(kind, id, options = {}) {
   setDocumentHeading(opened.tab);
   renderTabStrip();
   content.innerHTML = `<article class="sheet">
+    ${options.justSaved ? `<div class="saved-bar" role="status"><strong>تم حفظ الفاتورة رقم ${invoice.no}</strong><button id="newAfterSave" class="primary" type="button">فاتورة جديدة</button><button id="printAfterSave" type="button">طباعة</button></div>` : ''}
     <header>
       <div><h2>فاتورة ${invoice.no}</h2><p>${esc(invoice.name)} · ${dateText(invoice.date)} · المستخدم: ${whoText(invoice.byName)}</p></div>
       <button id="closeDrawer" class="ghost" type="button">إغلاق</button>
@@ -3721,6 +3824,10 @@ async function openInvoice(kind, id, options = {}) {
     const title = kind === 'sales' ? 'فاتورة بيع' : 'فاتورة شراء';
     printDocument(invoicePrintHtml(kind, data), `${title} ${invoice.no} - الرمزي إخوان`);
   };
+  const printAfterSave = document.getElementById('printAfterSave');
+  if (printAfterSave) printAfterSave.onclick = () => document.getElementById('printInvoice').click();
+  const newAfterSave = document.getElementById('newAfterSave');
+  if (newAfterSave) newAfterSave.onclick = () => openSection(kind === 'sales' ? 'newSale' : 'newPurchase', { force: true });
   document.getElementById('editInvoice').onclick = () => beginEdit(kind, id);
   setPageActions({
     add: false,
