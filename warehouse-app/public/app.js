@@ -2681,6 +2681,7 @@ function renderTransfer() {
       <div class="toolbar">
         <label class="dash-store">من المخزن<select id="fromStore">${storeOptions(state.stores[0] ? state.stores[0].id : null)}</select></label>
         <label class="dash-store">إلى المخزن<select id="toStore">${storeOptions(destination)}</select></label>
+        ${opDateField('transferDate')}
       </div>
       <div class="toolbar">
         <input id="productQ" placeholder="رقم أو كود أو اسم الصنف">
@@ -2744,6 +2745,7 @@ function renderTransfer() {
         body: JSON.stringify({
           fromStoreId: Number(document.getElementById('fromStore').value),
           toStoreId: Number(document.getElementById('toStore').value),
+          date: opDateValue('transferDate'),
           lines
         })
       });
@@ -2765,6 +2767,7 @@ function renderStocktake() {
     <div class="panel panel-pad sale-form">
       <div class="toolbar">
         <label class="dash-store">المخزن<select id="stocktakeStore">${storeOptions(defaultStore)}</select></label>
+        ${opDateField('stocktakeDate')}
         <input id="stocktakeNotes" maxlength="250" placeholder="ملاحظات، ويمكن تركها فارغة">
       </div>
       <div class="toolbar">
@@ -2809,6 +2812,21 @@ function renderStocktake() {
     });
   };
   draw();
+  document.getElementById('stocktakeDate').onchange = async () => {
+    const error = document.getElementById('stocktakeError');
+    error.textContent = '';
+    const storeId = Number(document.getElementById('stocktakeStore').value);
+    const day = encodeURIComponent(opDateValue('stocktakeDate'));
+    try {
+      for (const line of lines) {
+        const balance = await api(`/api/stock/balance?productId=${line.productId}&storeId=${storeId}&date=${day}`);
+        line.bookQty = Number(balance.qty || 0);
+      }
+      draw();
+    } catch (err) {
+      error.textContent = err.message;
+    }
+  };
   document.getElementById('findProduct').onclick = async () => {
     const error = document.getElementById('stocktakeError');
     error.textContent = '';
@@ -2837,7 +2855,7 @@ function renderStocktake() {
         let counted = Number(document.getElementById('countedQty').value);
         if (!(counted >= 0) || !Number.isFinite(counted)) counted = 0;
         try {
-          const balance = await api(`/api/stock/balance?productId=${productId}&storeId=${storeId}`);
+          const balance = await api(`/api/stock/balance?productId=${productId}&storeId=${storeId}&date=${encodeURIComponent(opDateValue('stocktakeDate'))}`);
           lines.push({
             productId,
             code: row.dataset.code,
@@ -2871,6 +2889,7 @@ function renderStocktake() {
         body: JSON.stringify({
           storeId: Number(document.getElementById('stocktakeStore').value),
           notes: document.getElementById('stocktakeNotes').value,
+          date: opDateValue('stocktakeDate'),
           lines: lines.map((line) => ({ productId: line.productId, countedQty: line.countedQty }))
         })
       });
@@ -2884,8 +2903,8 @@ function renderStocktake() {
   };
 }
 
-const draft = { clientId: 0, clientName: 'عميل نقدي', lines: [], editId: null, editNo: null, paid: true, partial: 0, discount: 0, storeId: null, hold: false };
-const purchaseDraft = { supplierId: 0, supplierName: 'مشتريات نقدية', lines: [], editId: null, editNo: null, paid: true, partial: 0, discount: 0, storeId: null, hold: false };
+const draft = { clientId: 0, clientName: 'عميل نقدي', lines: [], editId: null, editNo: null, paid: true, partial: 0, discount: 0, storeId: null, hold: false, date: '' };
+const purchaseDraft = { supplierId: 0, supplierName: 'مشتريات نقدية', lines: [], editId: null, editNo: null, paid: true, partial: 0, discount: 0, storeId: null, hold: false, date: '' };
 
 function resetSaleDraft() {
   draft.clientId = 0;
@@ -2898,6 +2917,7 @@ function resetSaleDraft() {
   draft.discount = 0;
   draft.storeId = null;
   draft.hold = false;
+  draft.date = '';
 }
 
 function resetPurchaseDraft() {
@@ -2911,6 +2931,7 @@ function resetPurchaseDraft() {
   purchaseDraft.discount = 0;
   purchaseDraft.storeId = null;
   purchaseDraft.hold = false;
+  purchaseDraft.date = '';
 }
 
 function allStoreOptions(selected) {
@@ -3094,6 +3115,26 @@ function bindNewParty(kind) {
   };
 }
 
+function localToday() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+function opDateField(id, value) {
+  const today = localToday();
+  return `<label class="paid-amount op-date">التاريخ<input id="${id}" type="date" max="${today}" value="${esc(value || today)}" required></label>`;
+}
+
+function bindDraftDate(id, target) {
+  const input = document.getElementById(id);
+  if (input) input.onchange = () => { target.date = input.value; };
+}
+
+function opDateValue(id) {
+  const input = document.getElementById(id);
+  return input ? input.value : '';
+}
+
 function paidPayload() {
   const paid = document.getElementById('paidNow').checked;
   const raw = document.getElementById('paidAmount').value.trim();
@@ -3124,6 +3165,7 @@ function renderNewSale() {
       <div class="toolbar">
         <input id="clientQ" placeholder="ابحث عن عميل للبيع الآجل">
         <select id="saleStore" title="المخزن الافتراضي للأصناف الجديدة">${storeOptions(draft.storeId)}</select>
+        ${opDateField('saleDate', draft.date)}
         ${paidFields(draft.paid, draft.partial)}
         <button id="findClient" type="button">بحث عميل</button>
         <button id="newClient" type="button" class="ghost">عميل جديد</button>
@@ -3181,6 +3223,7 @@ function renderNewSale() {
   };
   drawLines();
   bindPaidAmount();
+  bindDraftDate('saleDate', draft);
   bindNewParty('sales');
   document.getElementById('saleDiscount').oninput = () => {
     const total = draft.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
@@ -3274,6 +3317,7 @@ function renderNewSale() {
     try {
       const payload = {
         clientId: draft.clientId,
+        date: opDateValue('saleDate'),
         storeId: headerStore,
         discount: Number(document.getElementById('saleDiscount').value || 0),
         ...paidPayload(),
@@ -3311,6 +3355,7 @@ function renderNewPurchase() {
       <div class="toolbar">
         <input id="supplierQ" placeholder="ابحث عن مورد للشراء الآجل">
         <select id="purchaseStore" title="المخزن الافتراضي للأصناف الجديدة">${storeOptions(purchaseDraft.storeId)}</select>
+        ${opDateField('purchaseDate', purchaseDraft.date)}
         ${paidFields(purchaseDraft.paid, purchaseDraft.partial)}
         <button id="findSupplier" type="button">بحث مورد</button>
         <button id="newSupplier" type="button" class="ghost">مورد جديد</button>
@@ -3368,6 +3413,7 @@ function renderNewPurchase() {
   };
   drawLines();
   bindPaidAmount();
+  bindDraftDate('purchaseDate', purchaseDraft);
   bindNewParty('purchases');
   document.getElementById('purchaseDiscount').oninput = () => {
     const total = purchaseDraft.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
@@ -3461,6 +3507,7 @@ function renderNewPurchase() {
     try {
       const payload = {
         supplierId: purchaseDraft.supplierId,
+        date: opDateValue('purchaseDate'),
         storeId: headerStore,
         discount: Number(document.getElementById('purchaseDiscount').value || 0),
         ...paidPayload(),
@@ -3715,6 +3762,7 @@ async function beginEdit(kind, id) {
   target.paid = fully || target.partial > 0;
   target.storeId = lines[0] ? lines[0].storeId : null;
   target.hold = true;
+  target.date = invoice.day || String(invoice.date || '').slice(0, 10);
   await openSection(kind === 'sales' ? 'newSale' : 'newPurchase', { force: true });
 }
 
@@ -3739,6 +3787,7 @@ function openReturn(kind, id, data, options = {}) {
       }).join('')}
     </div>
     <div class="meta"><span id="returnTotal">الإجمالي: 0</span></div>
+    <div class="toolbar">${opDateField('returnDate')}</div>
     <button id="saveReturn" class="primary" type="button">حفظ المرتجع</button>
     <p class="note">المرتجع يرجع الكمية للمخزن ويعكس قيد الفاتورة بنفس طريقة البرنامج الأصلي.</p>
     <div id="returnError" class="error"></div>
@@ -3771,7 +3820,7 @@ function openReturn(kind, id, data, options = {}) {
     }
     button.disabled = true;
     try {
-      await api(`/api/${kind}/${id}/return`, { method: 'POST', body: JSON.stringify({ lines: payload }) });
+      await api(`/api/${kind}/${id}/return`, { method: 'POST', body: JSON.stringify({ lines: payload, date: opDateValue('returnDate') }) });
       closeTab(key, { silent: true });
       await openInvoice(kind, id, { force: true });
     } catch (err) {
