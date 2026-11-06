@@ -2034,6 +2034,13 @@ app.get('/api/products/:id', requireAuth, async (req, res) => {
       tableCols('tblClients_Products'),
       tableCols('tblSuppliers_Products')
     ]);
+    const storesPromise = runQuery(`
+      SELECT s.StoreID AS id, ISNULL(s.StoreName, N'') AS name, ISNULL(ps.ProductStock, 0) AS qty
+      FROM tblStores s
+      LEFT JOIN tblProductsStores ps ON ps.StoreID = s.StoreID AND ps.ProductID = @id AND ps.CompCode = 0
+      ORDER BY ISNULL(ps.ProductStock, 0) DESC, s.StoreID
+    `, [{ name: 'id', type: sql.Numeric(28, 0), value: id }]);
+    storesPromise.catch(() => {});
     const rows = await runQuery(`
       SELECT
         p.ProductId AS id,
@@ -2064,7 +2071,8 @@ app.get('/api/products/:id', requireAuth, async (req, res) => {
       ref: `product:${id}`
     });
     const inquiries = loadActivity().filter((row) => row.ref === `product:${id}` && row.action === 'price').slice(0, 8);
-    res.json({ product, inquiries });
+    const stores = (await storesPromise).map((row) => ({ id: row.id, name: row.name, qty: Number(row.qty) || 0 }));
+    res.json({ product, inquiries, stores });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'تعذر تحميل الصنف' });
@@ -2513,12 +2521,13 @@ app.get('/api/suppliers/:id/purchases', requireAuth, async (req, res) => {
           ISNULL(pi.TotalPaiedAmount, 0) AS paid,
           ISNULL(pi.NotPaiedAmount, 0) AS due,
           ISNULL(pi.InsertedBy, N'') AS byName,
+          ISNULL(pi.CurrencyID, 0) AS currencyId,
           ROW_NUMBER() OVER (ORDER BY pi.PurchaseInvoiceDate DESC, pi.PurchaseInvoiceID DESC) AS rn,
           COUNT(*) OVER () AS total
         FROM tblPurchaseInvoice pi
         WHERE pi.SupplierID = @supplierId
       )
-      SELECT id, no, date, amount, paid, due, byName, total
+      SELECT id, no, date, amount, paid, due, byName, currencyId, total
       FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn
     `, [
       { name: 'supplierId', type: sql.Numeric(18, 0), value: supplierId },
@@ -2859,6 +2868,7 @@ app.get('/api/purchases', requireAuth, async (req, res) => {
           ISNULL(pi.TotalPaiedAmount, 0) AS paid,
           ISNULL(pi.NotPaiedAmount, 0) AS due,
           ISNULL(pi.InsertedBy, N'') AS byName,
+          ISNULL(pi.CurrencyID, 0) AS currencyId,
           ROW_NUMBER() OVER (ORDER BY pi.PurchaseInvoiceID DESC) AS rn,
           COUNT(*) OVER () AS total
         FROM tblPurchaseInvoice pi
@@ -2867,7 +2877,7 @@ app.get('/api/purchases', requireAuth, async (req, res) => {
           OR CAST(pi.PurchaseInvoiceNo AS nvarchar(40)) LIKE @like
           OR s.SupplierName LIKE @like
       )
-      SELECT id, no, date, name, amount, paid, due, byName, total
+      SELECT id, no, date, name, amount, paid, due, byName, currencyId, total
       FROM numbered WHERE rn BETWEEN @start AND @end ORDER BY rn
     `, [
       { name: 'q', type: sql.NVarChar(80), value: q },
@@ -2879,6 +2889,19 @@ app.get('/api/purchases', requireAuth, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'تعذر تحميل فواتير الشراء' });
+  }
+});
+
+app.get('/api/purchases/usd-rate', requireAuth, async (req, res) => {
+  try {
+    const rows = await runQuery(`
+      SELECT TOP 1 CAST(ExRate AS float) AS rate FROM tblPurchaseInvoice
+      WHERE CurrencyID = ${USD_CURRENCY} AND ExRate > 0 ORDER BY PurchaseInvoiceID DESC
+    `);
+    res.json({ rate: rows[0] ? Number(rows[0].rate) : null });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'تعذر قراءة سعر الدولار' });
   }
 });
 
@@ -2901,7 +2924,9 @@ app.get('/api/purchases/:id', requireAuth, async (req, res) => {
         ISNULL(pi.NotPaiedAmount, 0) AS due,
         ISNULL(pi.Notes, N'') AS notes,
         ISNULL(pi.ReturnedAmount, 0) AS returnedAmount,
-        ISNULL(pi.InsertedBy, N'') AS byName
+        ISNULL(pi.InsertedBy, N'') AS byName,
+        ISNULL(pi.CurrencyID, 0) AS currencyId,
+        CAST(ISNULL(pi.ExRate, 1) AS float) AS exRate
       FROM tblPurchaseInvoice pi
       LEFT JOIN tblSuppliers s ON s.SupplierID = pi.SupplierID
       WHERE pi.PurchaseInvoiceID = @id
@@ -3058,9 +3083,21 @@ async function nextNumber(tx, table, column) {
   return Number(result.recordset[0].n);
 }
 
+const USD_CURRENCY = 1;
+
+// Dollar purchase invoices follow the old program: amounts in dollars with ExRate, stock cost in pounds.
+function purchaseCurrency(body, existing) {
+  const usd = existing ? Number(existing.id) === USD_CURRENCY : String((body && body.currency) || '').toUpperCase() === 'USD';
+  if (!usd) return { id: 0, rate: 1 };
+  const given = body && body.exRate !== undefined && body.exRate !== null && body.exRate !== '' ? body.exRate : existing && existing.rate;
+  const rate = roundTo(given, 4);
+  if (rate == null || !(rate > 0) || rate > 100000) return { error: 'اكتب سعر الدولار بالجنيه' };
+  return { id: USD_CURRENCY, rate };
+}
+
 async function nextNumbers(tx, specs) {
-  const parts = specs.map(([table, column], index) =>
-    `(SELECT ISNULL(MAX(${column}), 0) + 1 FROM ${table} WITH (UPDLOCK, HOLDLOCK)) AS n${index}`);
+  const parts = specs.map(([table, column, where], index) =>
+    `(SELECT ISNULL(MAX(${column}), 0) + 1 FROM ${table} WITH (UPDLOCK, HOLDLOCK)${where ? ` WHERE ${where}` : ''}) AS n${index}`);
   const row = (await txQuery(tx, `SELECT ${parts.join(', ')}`)).recordset[0];
   return specs.map((spec, index) => Number(row[`n${index}`]));
 }
@@ -3396,6 +3433,9 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
   if (pay.error) return res.status(400).json({ error: pay.error });
   const collected = pay.amount;
   if (roundTo(invoiceTotal - collected, 4) > 0.0001 && !supplierId) return res.status(400).json({ error: 'فاتورة الآجل تحتاج مورداً' });
+  const currency = purchaseCurrency(req.body);
+  if (currency.error) return res.status(400).json({ error: currency.error });
+  if (currency.id && collected > 0) return res.status(400).json({ error: 'فاتورة الدولار تتسجل آجل على المورد، والسداد بيتعمل من البرنامج القديم' });
 
   let opDay;
   try { opDay = parseOpDay(req.body.date); } catch (error) { return res.status(400).json({ error: error.message }); }
@@ -3419,8 +3459,11 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
     if (!counterCode) throw new Error('المورد ليس له كود حساب');
     const counterAccount = await accountByCode(tx, counterCode);
 
-    const [invoiceNo, journalNo] = await nextNumbers(tx, [['tblPurchaseInvoice', 'PurchaseInvoiceNo'], ['tblJournalEntry', 'JournalEntryNo']]);
-    const description = clip(`فاتورة شراء رقم (${invoiceNo}) - (${supplier.name})`, 200);
+    const [invoiceNo, journalNo] = await nextNumbers(tx, [
+      ['tblPurchaseInvoice', 'PurchaseInvoiceNo', currency.id ? `CurrencyID = ${USD_CURRENCY}` : ''],
+      ['tblJournalEntry', 'JournalEntryNo']
+    ]);
+    const description = clip(`فاتورة شراء رقم (${invoiceNo})${currency.id ? ' بالدولار' : ''} - (${supplier.name})`, 200);
     const journal = await txQuery(tx, `
       INSERT INTO tblJournalEntry
         (JournalEntryNo, JournalEntryDis, JournalEntryDate, TotalDebit, TotalCredit, PeriodCode, CompCode,
@@ -3445,7 +3488,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
           (Ser, JournalEntryID, AccountId, AccCode, JEPartyDis, Debit, Credit, CurrencyID, ExRate,
            DocNum, Journal, CompCode, PeriodCode, InsertedDate, InsertedBy)
         VALUES
-          (@ser, @jid, @accountId, @accCode, @text, @debit, @credit, 0, 1,
+          (@ser, @jid, @accountId, @accCode, @text, @debit, @credit, @cur, @rate,
            @doc, N'PU', 0, 1, GETDATE(), @actor)
       `, [
         { name: 'ser', type: sql.SmallInt, value: index + 1 },
@@ -3455,7 +3498,9 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
         { name: 'text', type: sql.NVarChar(200), value: clip(line.text, 200) },
         { name: 'debit', type: sql.Numeric(18, 4), value: line.debit },
         { name: 'credit', type: sql.Numeric(18, 4), value: line.credit },
-        { name: 'doc', type: sql.Numeric(18, 0), value: invoiceNo }
+        { name: 'doc', type: sql.Numeric(18, 0), value: invoiceNo },
+        { name: 'cur', type: sql.Int, value: currency.id },
+        { name: 'rate', type: sql.Numeric(18, 4), value: currency.rate }
       ]);
     }
 
@@ -3469,7 +3514,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
          PurchaseInvoiceTypeId, InsertedDate, InsertedBy)
       VALUES
         (@no, @ref, 0, 0, @supplierId, CAST(${OP_DAY} AS datetime), @gross, 0, @dtype, 0, @discount, @discount,
-         @total, 0, 0, 0, 0, 0, 0, 0, @total, 0, 1, @collected,
+         @total, 0, 0, 0, 0, 0, 0, 0, @total, @cur, @rate, @collected,
          0, 0, @notes, 0, 1, @journalId, 1, 0, @typeId, GETDATE(), @actor);
       SELECT SCOPE_IDENTITY() AS id;
     `, [
@@ -3483,7 +3528,9 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
       { name: 'collected', type: sql.Numeric(18, 4), value: collected },
       { name: 'notes', type: sql.NVarChar(250), value: notes },
       { name: 'journalId', type: sql.Numeric(18, 0), value: journalId },
-      { name: 'typeId', type: sql.Int, value: invoiceTypeId(supplier.SupplierID) }
+      { name: 'typeId', type: sql.Int, value: invoiceTypeId(supplier.SupplierID) },
+      { name: 'cur', type: sql.Int, value: currency.id },
+      { name: 'rate', type: sql.Numeric(18, 4), value: currency.rate }
     ]);
     const invoiceId = invoice.recordset[0].id;
 
@@ -3509,14 +3556,14 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
            OutQuantity, OutBonus, PurchasePricePerUnit, Cost, TransactionID, CompCode, RowGUID)
         VALUES
           (@invoiceNo, ${OP_DAY}, ${OP_DAY}, @pid, @supplierId, @store, @qty, 0,
-           0, 0, @price, @price, 1, 0, @guid)
+           0, 0, @local, @local, 1, 0, @guid)
       `, [
         { name: 'invoiceNo', type: sql.Numeric(18, 0), value: invoiceNo },
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
         { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
         { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
         { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
-        { name: 'price', type: sql.Numeric(18, 4), value: line.price },
+        { name: 'local', type: sql.Numeric(18, 4), value: roundTo(line.price * currency.rate, 4) },
         { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
       txExec(tx, `
@@ -3527,7 +3574,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
            AddedItptAmount, TotalPricePerProduct, Cost, RowGUID, InventoryDate, InsertedDate, InsertedBy)
         VALUES
           (@invoiceId, @pid, @qty, 0, 0, @qty, 0, 0, @store, @price, @lineTotal, 0, 0, 0,
-           @lineTotal, 0, 0, 0, 0, 0, 0, @lineTotal, @price, @guid, ${OP_DAY}, GETDATE(), @actor)
+           @lineTotal, 0, 0, 0, 0, 0, 0, @lineTotal, @local, @guid, ${OP_DAY}, GETDATE(), @actor)
       `, [
         { name: 'invoiceId', type: sql.Numeric(18, 0), value: invoiceId },
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
@@ -3535,6 +3582,7 @@ app.post('/api/purchases', requireAuth, async (req, res) => {
         { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
         { name: 'price', type: sql.Numeric(18, 4), value: line.price },
         { name: 'lineTotal', type: sql.Numeric(18, 4), value: line.total },
+        { name: 'local', type: sql.Numeric(18, 4), value: roundTo(line.price * currency.rate, 4) },
         { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
     }
@@ -4316,7 +4364,7 @@ app.post('/api/stocktakings', requireAuth, async (req, res) => {
   }
 });
 
-async function alignInventoryGuid(tx, detailTable, line, invoiceNo, transactionId, qtyColumn, partyColumn, partyId) {
+async function alignInventoryGuid(tx, detailTable, line, invoiceNo, transactionId, qtyColumn, partyColumn, partyId, day) {
   const tables = { tblSellingInvoicesDetails: true, tblPurchaseInvoicesDetails: true };
   const qtyColumns = { OutQuantity: true, InQuantity: true };
   const partyColumns = { ClientID: true, SupplierID: true };
@@ -4341,7 +4389,8 @@ async function alignInventoryGuid(tx, detailTable, line, invoiceNo, transactionI
     { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
     { name: 'trx', type: sql.Int, value: transactionId },
     { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
-    { name: 'party', type: sql.Numeric(18, 0), value: Number(partyId) || 0 }
+    { name: 'party', type: sql.Numeric(18, 0), value: Number(partyId) || 0 },
+    { name: 'day', type: sql.NVarChar(10), value: day || '' }
   ];
   const attempts = [
     { qty: true, party: true, store: true },
@@ -4362,6 +4411,8 @@ async function alignInventoryGuid(tx, detailTable, line, invoiceNo, transactionI
     if (attempt.store) filters.push('i.StoreID = @store');
     if (attempt.qty) filters.push(`i.${qtyColumn} = @qty`);
     if (attempt.party) filters.push(`ISNULL(i.${partyColumn}, 0) = @party`);
+    // Purchase invoice numbers repeat, so unlinked rows must also share the invoice's date.
+    if (day) filters.push('CONVERT(char(10), i.InvoiceDate, 120) = @day');
     const found = await txQuery(tx, `
       SELECT TOP 5 i.ID AS id
       FROM tblInventory i WITH (UPDLOCK, HOLDLOCK)
@@ -4397,8 +4448,10 @@ async function writeJournalLines(tx, journalId, docNo, journalCode, rows) {
         (Ser, JournalEntryID, AccountId, AccCode, JEPartyDis, Debit, Credit, CurrencyID, ExRate,
          DocNum, Journal, CompCode, PeriodCode, InsertedDate, InsertedBy)
       VALUES
-        (@ser, @jid, @accountId, @accCode, @text, @debit, @credit, 0, 1, @doc, @journal, 0, 1, GETDATE(), @actor)
+        (@ser, @jid, @accountId, @accCode, @text, @debit, @credit, @cur, @rate, @doc, @journal, 0, 1, GETDATE(), @actor)
     `, [
+      { name: 'cur', type: sql.Int, value: line.currencyId || 0 },
+      { name: 'rate', type: sql.Numeric(18, 4), value: line.rate || 1 },
       { name: 'ser', type: sql.SmallInt, value: index + 1 },
       { name: 'jid', type: sql.Numeric(18, 0), value: journalId },
       { name: 'accountId', type: sql.Int, value: line.account.AccountId },
@@ -4431,16 +4484,19 @@ async function rebuildJournal(tx, journalId, total, description, docNo, journalC
 const INVOICE_DATES = {
   sale: {
     head: 'tblSellingInvoice', key: 'SellingInvoiceID', date: 'SellingInvoiceDate',
-    detail: 'tblSellingInvoicesDetails', pay: 'tblSellingInvoicesCollectingDetails', trx: 2
+    detail: 'tblSellingInvoicesDetails', pay: 'tblSellingInvoicesCollectingDetails', trx: 2,
+    qty: 'OutQuantity', party: 'ClientID'
   },
   purchase: {
     head: 'tblPurchaseInvoice', key: 'PurchaseInvoiceID', date: 'PurchaseInvoiceDate',
-    detail: 'tblPurchaseInvoicesDetails', pay: 'tblPurchaseInvoicesPayingDetails', trx: 1
+    detail: 'tblPurchaseInvoicesDetails', pay: 'tblPurchaseInvoicesPayingDetails', trx: 1,
+    qty: 'InQuantity', party: 'SupplierID'
   }
 };
 
 // Payments made on the invoice's old day move with it; later payments keep their own date.
-async function moveInvoiceDate(tx, kind, invoiceId, invoiceNo, journalId, oldDay) {
+// Purchase numbers repeat across invoices, so stock rows are found through the invoice's own lines.
+async function moveInvoiceDate(tx, kind, invoiceId, invoiceNo, journalId, oldDay, partyId) {
   const t = INVOICE_DATES[kind];
   const inputs = [
     { name: 'id', type: sql.Numeric(18, 0), value: invoiceId },
@@ -4463,15 +4519,19 @@ async function moveInvoiceDate(tx, kind, invoiceId, invoiceNo, journalId, oldDay
     INNER JOIN ${t.pay} p ON p.SafeOperationID = s.OperationID
     WHERE p.${t.key} = @id AND CONVERT(char(10), s.SafeOperationDate, 120) = @oldDay;
   `, inputs);
-  const rows = await txQuery(tx, `
-    SELECT ID AS id FROM tblInventory WITH (UPDLOCK, HOLDLOCK)
-    WHERE InvoiceNo = @no AND TransactionID = @trx AND CompCode = 0 AND InvoiceDate <> ${OP_DAY}
-    ORDER BY ID
-  `, inputs);
+  const lines = (await txQuery(tx, `
+    SELECT id AS lineId, ProductID AS productId, StoreID AS storeId, ${t.qty} AS qty
+    FROM ${t.detail} WITH (UPDLOCK, HOLDLOCK) WHERE ${t.key} = @id
+  `, inputs)).recordset;
   // One row per statement: the old program's update trigger recalculates running stock row by row.
-  for (const row of rows.recordset) {
-    txExec(tx, `UPDATE tblInventory SET InvoiceDate = ${OP_DAY}, DocumentDate = ${OP_DAY} WHERE ID = @invId`, [
-      { name: 'invId', type: sql.Numeric(18, 0), value: row.id }
+  for (const line of lines) {
+    const inventoryId = await alignInventoryGuid(tx, t.detail, line, invoiceNo, t.trx, t.qty, t.party, partyId, oldDay);
+    txExec(tx, `
+      UPDATE tblInventory SET InvoiceDate = ${OP_DAY}, DocumentDate = ${OP_DAY}
+      WHERE ID = @invId AND TransactionID = @trx AND InvoiceDate <> ${OP_DAY}
+    `, [
+      { name: 'invId', type: sql.Numeric(18, 0), value: inventoryId },
+      { name: 'trx', type: sql.Int, value: t.trx }
     ]);
   }
 }
@@ -4705,7 +4765,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
     const plan = planLines(existing, parsed.lines);
     await assertProducts(tx, plan.deletes.concat(plan.updates, plan.inserts).map((line) => line.productId));
     for (const line of plan.deletes) {
-      await alignInventoryGuid(tx, 'tblSellingInvoicesDetails', line, header.no, 2, 'OutQuantity', 'ClientID', header.clientId);
+      await alignInventoryGuid(tx, 'tblSellingInvoicesDetails', line, header.no, 2, 'OutQuantity', 'ClientID', header.clientId, header.day);
       const removed = await txQuery(tx, `DELETE FROM tblSellingInvoicesDetails WHERE id = @lineId AND SellingInvoiceID = @id`, [
         { name: 'lineId', type: sql.Numeric(18, 0), value: line.lineId },
         { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
@@ -4716,7 +4776,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
       if (line.unchanged && Number(client.ClientId || 0) === Number(header.clientId || 0)) continue;
       const inventoryId = await alignInventoryGuid(tx, 'tblSellingInvoicesDetails', {
         lineId: line.lineId, productId: line.productId, storeId: line.oldStore, qty: line.oldQty
-      }, header.no, 2, 'OutQuantity', 'ClientID', header.clientId);
+      }, header.no, 2, 'OutQuantity', 'ClientID', header.clientId, header.day);
       await ensureStore(tx, line.productId, line.storeId);
       const stock = await txQuery(tx, `
         UPDATE tblInventory SET OutQuantity = @qty, LotPricePerUnit = @price, TotalLotPrice = @total,
@@ -4905,7 +4965,7 @@ app.put('/api/sales/:id', requireAuth, async (req, res) => {
       mergeDebits(debitParts).map((part) => ({ account: part.account, debit: part.amount, credit: 0, text: saleText }))
         .concat([{ account: salesAccount, debit: 0, credit: net, text: `مبيعات - (${client.name})` }])
     );
-    if (tx.opDay !== header.day) await moveInvoiceDate(tx, 'sale', invoiceId, header.no, header.journalId, header.day);
+    if (tx.opDay !== header.day) await moveInvoiceDate(tx, 'sale', invoiceId, header.no, header.journalId, header.day, client.ClientId || 0);
     await stockAfter(tx, stockSnap);
     await tx.commit();
     memoryCache.clear();
@@ -4933,6 +4993,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
     const stockSnap = await stockBefore(tx, bodyProductIds(req.body), { table: 'tblPurchaseInvoicesDetails', key: 'PurchaseInvoiceID', id: invoiceId });
     const headerRow = await txQuery(tx, `
       SELECT PurchaseInvoiceNo AS no, SupplierID AS supplierId, JournalEntryID AS journalId, CONVERT(char(10), PurchaseInvoiceDate, 120) AS day,
+        ISNULL(CurrencyID, 0) AS currencyId, ISNULL(ExRate, 1) AS exRate,
         ISNULL(PurchaseInvoiceTotalAmount, 0) AS total, ISNULL(TotalPaiedAmount, 0) AS paid,
         ISNULL(ReturnedAmount, 0) AS returnedAmount, ISNULL(TotalDiscountAmount, 0) AS discount,
         ISNULL(ProductsDiscountAmount, 0) AS productsDiscount, ISNULL(SalesTaxTotalAmount, 0) AS tax,
@@ -4943,6 +5004,9 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
     const header = headerRow.recordset[0];
     if (!header) throw new Error('الفاتورة غير موجودة');
     tx.opDay = parseOpDay(req.body.date, header.day);
+    const currency = purchaseCurrency(req.body, { id: header.currencyId, rate: Number(header.exRate) });
+    if (currency.error) throw new Error(currency.error);
+    const rateChanged = Boolean(currency.id) && Math.abs(currency.rate - Number(header.exRate)) > 0.00001;
     const existingRows = await txQuery(tx, `
       SELECT Id AS lineId, ProductID AS productId, StoreID AS storeId, InQuantity AS qty,
         ISNULL(ReturnedQuantity, 0) AS returned, RowGuid AS rowGuid, ISNULL(PurchasePrice, 0) AS price
@@ -4971,6 +5035,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
     const payment = payments.recordset[0] || null;
     if (payment && Number(payment.discount) > 0.0001) throw new Error('الفاتورة فيها خصم على السداد');
     const paid = nextPaid(header.paid, header.total, net, req.body);
+    if (currency.id && paid > 0.0001) throw new Error('فاتورة الدولار تتسجل آجل على المورد، والسداد بيتعمل من البرنامج القديم');
     if (!payment && Number(header.paid) > 0.0001 && !moneyClose(paid, header.paid)) {
       throw new Error('المبلغ المدفوع غير مربوط بحركة خزنة، لا يمكن تغيير حالة السداد');
     }
@@ -4988,7 +5053,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
     const plan = planLines(existing, parsed.lines);
     await assertProducts(tx, plan.deletes.concat(plan.updates, plan.inserts).map((line) => line.productId));
     for (const line of plan.deletes) {
-      await alignInventoryGuid(tx, 'tblPurchaseInvoicesDetails', line, header.no, 1, 'InQuantity', 'SupplierID', header.supplierId);
+      await alignInventoryGuid(tx, 'tblPurchaseInvoicesDetails', line, header.no, 1, 'InQuantity', 'SupplierID', header.supplierId, header.day);
       const removed = await txQuery(tx, `DELETE FROM tblPurchaseInvoicesDetails WHERE Id = @lineId AND PurchaseInvoiceID = @id`, [
         { name: 'lineId', type: sql.Numeric(18, 0), value: line.lineId },
         { name: 'id', type: sql.Numeric(18, 0), value: invoiceId }
@@ -4996,17 +5061,19 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
       assertOne(removed, 'تعذر حذف صنف من الفاتورة');
     }
     for (const line of plan.updates) {
-      if (line.unchanged && Number(supplier.SupplierID || 0) === Number(header.supplierId || 0)) continue;
+      if (line.unchanged && !rateChanged && Number(supplier.SupplierID || 0) === Number(header.supplierId || 0)) continue;
       const inventoryId = await alignInventoryGuid(tx, 'tblPurchaseInvoicesDetails', {
         lineId: line.lineId, productId: line.productId, storeId: line.oldStore, qty: line.oldQty
-      }, header.no, 1, 'InQuantity', 'SupplierID', header.supplierId);
+      }, header.no, 1, 'InQuantity', 'SupplierID', header.supplierId, header.day);
       await ensureStore(tx, line.productId, line.storeId);
       const stock = await txQuery(tx, `
-        UPDATE tblInventory SET InQuantity = @qty, PurchasePricePerUnit = @price, StoreID = @store, SupplierID = @supplierId
+        UPDATE tblInventory SET InQuantity = @qty, PurchasePricePerUnit = @local, StoreID = @store, SupplierID = @supplierId,
+          Cost = CASE WHEN @cur = ${USD_CURRENCY} THEN @local ELSE Cost END
         WHERE ID = @invId AND TransactionID = 1
       `, [
         { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
-        { name: 'price', type: sql.Numeric(18, 4), value: line.price },
+        { name: 'local', type: sql.Numeric(18, 4), value: roundTo(line.price * currency.rate, 4) },
+        { name: 'cur', type: sql.Int, value: currency.id },
         { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
         { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
         { name: 'invId', type: sql.Numeric(18, 0), value: inventoryId }
@@ -5014,9 +5081,12 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
       assertOne(stock, 'تعذر تحديث حركة المخزون');
       const detail = await txQuery(tx, `
         UPDATE tblPurchaseInvoicesDetails SET InQuantity = @qty, StockQty = @qty, StoreID = @store, PurchasePrice = @price,
-          TotalPrice = @total, TotalPriceAfterDiscount = @total, TotalPricePerProduct = @total
+          TotalPrice = @total, TotalPriceAfterDiscount = @total, TotalPricePerProduct = @total,
+          Cost = CASE WHEN @cur = ${USD_CURRENCY} THEN @local ELSE Cost END
         WHERE Id = @lineId AND PurchaseInvoiceID = @id
       `, [
+        { name: 'cur', type: sql.Int, value: currency.id },
+        { name: 'local', type: sql.Numeric(18, 4), value: roundTo(line.price * currency.rate, 4) },
         { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
         { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
         { name: 'price', type: sql.Numeric(18, 4), value: line.price },
@@ -5035,14 +5105,14 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
            OutQuantity, OutBonus, PurchasePricePerUnit, Cost, TransactionID, CompCode, RowGUID)
         VALUES
           (@invoiceNo, ${OP_DAY}, ${OP_DAY}, @pid, @supplierId, @store, @qty, 0,
-           0, 0, @price, @price, 1, 0, @guid)
+           0, 0, @local, @local, 1, 0, @guid)
       `, [
         { name: 'invoiceNo', type: sql.Numeric(18, 0), value: header.no },
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
         { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
         { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
         { name: 'qty', type: sql.Numeric(18, 5), value: line.qty },
-        { name: 'price', type: sql.Numeric(18, 4), value: line.price },
+        { name: 'local', type: sql.Numeric(18, 4), value: roundTo(line.price * currency.rate, 4) },
         { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
       txExec(tx, `
@@ -5053,7 +5123,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
            AddedItptAmount, TotalPricePerProduct, Cost, RowGUID, InventoryDate, InsertedDate, InsertedBy)
         VALUES
           (@invoiceId, @pid, @qty, 0, 0, @qty, 0, 0, @store, @price, @lineTotal, 0, 0, 0,
-           @lineTotal, 0, 0, 0, 0, 0, 0, @lineTotal, @price, @guid, ${OP_DAY}, GETDATE(), @actor)
+           @lineTotal, 0, 0, 0, 0, 0, 0, @lineTotal, @local, @guid, ${OP_DAY}, GETDATE(), @actor)
       `, [
         { name: 'invoiceId', type: sql.Numeric(18, 0), value: invoiceId },
         { name: 'pid', type: sql.Numeric(18, 0), value: line.productId },
@@ -5061,6 +5131,7 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
         { name: 'store', type: sql.Numeric(18, 0), value: line.storeId },
         { name: 'price', type: sql.Numeric(18, 4), value: line.price },
         { name: 'lineTotal', type: sql.Numeric(18, 4), value: line.total },
+        { name: 'local', type: sql.Numeric(18, 4), value: roundTo(line.price * currency.rate, 4) },
         { name: 'guid', type: sql.UniqueIdentifier, value: guid }
       ]);
     }
@@ -5087,9 +5158,10 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
     txExec(tx, `
       UPDATE tblPurchaseInvoice SET SupplierID = @supplierId, PurchaseInvoiceTypeId = @typeId, TotalProductsPrice = @gross,
         DiscountType = @dtype, DiscountAmount = @discount, TotalDiscountAmount = @discount,
-        TaxbaseAmount = @net, PurchaseInvoiceTotalAmount = @net, TotalPaiedAmount = @paid
+        TaxbaseAmount = @net, PurchaseInvoiceTotalAmount = @net, TotalPaiedAmount = @paid, ExRate = @rate
       WHERE PurchaseInvoiceID = @id
     `, [
+      { name: 'rate', type: sql.Numeric(18, 4), value: currency.rate },
       { name: 'supplierId', type: sql.Numeric(18, 0), value: supplier.SupplierID || 0 },
       { name: 'typeId', type: sql.Int, value: invoiceTypeId(supplier.SupplierID) },
       { name: 'gross', type: sql.Numeric(18, 4), value: parsed.total },
@@ -5176,11 +5248,11 @@ app.put('/api/purchases/:id', requireAuth, async (req, res) => {
       clip(`${purchaseText} - (${supplier.name})`, 250),
       header.no, 'PU',
       [
-        { account: purchasesAccount, debit: net, credit: 0, text: purchaseText },
-        { account: counterAccount, debit: 0, credit: net, text: `مشتريات - (${supplier.name})` }
+        { account: purchasesAccount, debit: net, credit: 0, text: purchaseText, currencyId: currency.id, rate: currency.rate },
+        { account: counterAccount, debit: 0, credit: net, text: `مشتريات - (${supplier.name})`, currencyId: currency.id, rate: currency.rate }
       ]
     );
-    if (tx.opDay !== header.day) await moveInvoiceDate(tx, 'purchase', invoiceId, header.no, header.journalId, header.day);
+    if (tx.opDay !== header.day) await moveInvoiceDate(tx, 'purchase', invoiceId, header.no, header.journalId, header.day, supplier.SupplierID || 0);
     await stockAfter(tx, stockSnap);
     await tx.commit();
     memoryCache.clear();
@@ -5438,7 +5510,8 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
              ISNULL(pi.PurchaseInvoiceTotalAmount, 0) AS total, ISNULL(pi.TotalPaiedAmount, 0) AS paid,
              ISNULL(pi.TotalOnPaiedDiscount, 0) AS discount, ISNULL(pi.ReturnedAmount, 0) AS returnedAmount,
              ISNULL(NULLIF(LTRIM(RTRIM(s.SupplierName)), N''), N'مشتريات نقدية') AS name,
-             ISNULL(s.AccCode, N'') AS accCode, CONVERT(char(10), pi.PurchaseInvoiceDate, 120) AS day
+             ISNULL(s.AccCode, N'') AS accCode, CONVERT(char(10), pi.PurchaseInvoiceDate, 120) AS day,
+             ISNULL(pi.CurrencyID, 0) AS currencyId
       FROM tblPurchaseInvoice pi WITH (UPDLOCK, HOLDLOCK)
       LEFT JOIN tblSuppliers s ON s.SupplierID = pi.SupplierID
       WHERE pi.PurchaseInvoiceID = @id
@@ -5446,6 +5519,7 @@ app.post('/api/purchases/:id/return', requireAuth, async (req, res) => {
     if (!header) throw new Error('الفاتورة غير موجودة');
     tx.opDay = parseOpDay(req.body && req.body.date);
     if (header.day && tx.opDay < header.day) throw new Error('تاريخ المرتجع لازم يكون في يوم الفاتورة أو بعده');
+    if (Number(header.currencyId)) throw new Error('مرتجع فواتير الدولار يتعمل من البرنامج القديم');
     const sources = (await txQuery(tx, `
       SELECT d.Id AS lineId, d.ProductID AS productId, ISNULL(d.StoreID, 0) AS storeId,
              ISNULL(d.InQuantity, 0) AS qty, ISNULL(d.ReturnedQuantity, 0) AS returned,

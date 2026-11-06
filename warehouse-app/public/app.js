@@ -1450,6 +1450,18 @@ async function fillProductHistory(kind, id, product, page, token, hostKey) {
   }
 }
 
+function storeStockHtml(stores) {
+  if (!stores.length) return '';
+  const total = stores.reduce((sum, store) => sum + (Number(store.qty) || 0), 0);
+  return `<div class="wide store-stock">
+    <strong>المخزون في كل مخزن</strong>
+    <div class="store-stock-grid">
+      ${stores.map((store) => `<div class="${Number(store.qty) > 0 ? 'has' : (Number(store.qty) < 0 ? 'neg' : 'zero')}"><span>${esc(store.name)}</span><b>${num(store.qty)}</b></div>`).join('')}
+      <div class="total"><span>الإجمالي</span><b>${num(total)}</b></div>
+    </div>
+  </div>`;
+}
+
 async function openProductForm(id, options = {}) {
   const editing = !id || Boolean(options.edit);
   const key = id ? `product:${id}` : 'product:new';
@@ -1461,6 +1473,7 @@ async function openProductForm(id, options = {}) {
   const epoch = ++opened.tab.epoch;
   let loaded = null;
   let inquiries = [];
+  let storeStock = [];
   let nextProductId = '';
   content.innerHTML = '<div class="skeleton"><span></span><span></span><span></span></div>';
   if (id) {
@@ -1469,6 +1482,7 @@ async function openProductForm(id, options = {}) {
       if (!tabIsCurrent(key, epoch)) return abandonTab(key, epoch);
       loaded = data.product;
       inquiries = data.inquiries || [];
+      storeStock = data.stores || [];
     } catch (error) {
       if (!tabIsCurrent(key, epoch)) return abandonTab(key, epoch);
       content.innerHTML = `<div class="error">${esc(error.message)}</div>`;
@@ -1505,6 +1519,7 @@ async function openProductForm(id, options = {}) {
     </header>
     <form id="productForm" class="form-grid${id && !editing ? ' form-view' : ''}">
       ${id ? `<div class="wide history-row"><button id="saleHistory" class="history-btn" type="button">تاريخ البيع</button><button id="buyHistory" class="history-btn" type="button">تاريخ الشراء</button><button id="allMoves" class="history-btn" type="button">جميع الحركات</button>${canCatalog() ? '<button id="catalogBtn" class="history-btn" type="button">كتالوج</button>' : ''}</div>` : ''}
+      ${id ? storeStockHtml(storeStock) : ''}
       ${id ? `<div class="wide note"><strong>استعلامات السعر</strong>${inquiries.map((row) => `<div>${esc(row.name)} · ${whenText(row.at)}</div>`).join('') || '<div>لا يوجد</div>'}</div>` : ''}
       ${field('رقم الصنف', `<input value="${esc(id ? product.id : nextProductId)}" readonly>`)}
       ${field('الكود', `<input id="pCode" value="${esc(product.code)}" maxlength="50" placeholder="اختياري">`)}
@@ -2035,7 +2050,7 @@ function profilePrintHtml(kind, data) {
   ];
   const invoiceRows = data.invoices?.rows || [];
   const invoiceBody = invoiceRows.length
-    ? invoiceRows.map((row) => `<tr><td>${esc(row.no)}</td><td>${dateText(row.date)}</td><td>${whoText(row.byName)}</td><td class="num">${money(row.amount)}</td><td class="num">${money(row.paid)}</td><td class="num">${money(row.due)}</td></tr>`).join('')
+    ? invoiceRows.map((row) => `<tr><td>${esc(row.no)}</td><td>${dateText(row.date)}</td><td>${whoText(row.byName)}</td><td class="num">${curMoney(row.amount, row.currencyId)}</td><td class="num">${curMoney(row.paid, row.currencyId)}</td><td class="num">${curMoney(row.due, row.currencyId)}</td></tr>`).join('')
     : '<tr><td class="print-empty" colspan="6">لا توجد فواتير</td></tr>';
   const statement = data.statement || { reason: 'no-account' };
   let statementBlock = '<p class="print-note">لا يوجد كود حساب</p>';
@@ -2121,7 +2136,7 @@ async function openPartyProfile(kind, id, invoicePage = 1, statementPage = 1, op
       (data.invoices?.rows || []).map((row) => ({
         clickable: true,
         attrs: `data-id="${row.id}"`,
-        cells: [row.no, dateText(row.date), whoText(row.byName), money(row.amount), money(row.paid), money(row.due)],
+        cells: [row.no, dateText(row.date), whoText(row.byName), curMoney(row.amount, row.currencyId), curMoney(row.paid, row.currencyId), curMoney(row.due, row.currencyId)],
         classes: ['', '', '', '', '', Number(row.due) > 0 ? 'due' : 'ok']
       }))
     );
@@ -2220,7 +2235,7 @@ function renderInvoices(kind, data, party) {
     data.rows.map((row) => ({
       clickable: true,
       attrs: `data-id="${row.id}"`,
-      cells: [row.no, dateText(row.date), esc(row.name), whoText(row.byName), money(row.amount), money(row.paid), money(row.due)],
+      cells: [row.no, dateText(row.date), esc(row.name), whoText(row.byName), curMoney(row.amount, row.currencyId), curMoney(row.paid, row.currencyId), curMoney(row.due, row.currencyId)],
       classes: ['', '', '', '', '', '', Number(row.due) > 0 ? 'due' : 'ok']
     }))
   );
@@ -2953,7 +2968,7 @@ function renderStocktake() {
 }
 
 const draft = { clientId: 0, clientName: 'عميل نقدي', lines: [], editId: null, editNo: null, paid: true, partial: 0, discount: 0, storeId: null, hold: false, date: '' };
-const purchaseDraft = { supplierId: 0, supplierName: 'مشتريات نقدية', lines: [], editId: null, editNo: null, paid: true, partial: 0, discount: 0, storeId: null, hold: false, date: '' };
+const purchaseDraft = { supplierId: 0, supplierName: 'مشتريات نقدية', lines: [], editId: null, editNo: null, paid: true, partial: 0, discount: 0, storeId: null, hold: false, date: '', currency: 'EGP', exRate: '' };
 
 function resetSaleDraft() {
   draft.clientId = 0;
@@ -2981,6 +2996,8 @@ function resetPurchaseDraft() {
   purchaseDraft.storeId = null;
   purchaseDraft.hold = false;
   purchaseDraft.date = '';
+  purchaseDraft.currency = 'EGP';
+  purchaseDraft.exRate = '';
 }
 
 function allStoreOptions(selected) {
@@ -3456,6 +3473,8 @@ function renderNewPurchase() {
         <input id="supplierQ" placeholder="ابحث عن مورد للشراء الآجل">
         <select id="purchaseStore" title="المخزن الافتراضي للأصناف الجديدة">${storeOptions(purchaseDraft.storeId)}</select>
         ${opDateField('purchaseDate', purchaseDraft.date)}
+        <label class="paid-amount">العملة<select id="purchaseCurrency"${editing ? ' disabled' : ''}><option value="EGP"${purchaseDraft.currency === 'USD' ? '' : ' selected'}>جنيه</option><option value="USD"${purchaseDraft.currency === 'USD' ? ' selected' : ''}>دولار</option></select></label>
+        <label id="rateWrap" class="paid-amount${purchaseDraft.currency === 'USD' ? '' : ' hidden'}">سعر الدولار<input id="purchaseRate" type="number" min="0" step="0.01" value="${esc(purchaseDraft.exRate)}" placeholder="بالجنيه"></label>
         ${paidFields(purchaseDraft.paid, purchaseDraft.partial)}
         <button id="findSupplier" type="button">بحث مورد</button>
         <button id="newSupplier" type="button" class="ghost">مورد جديد</button>
@@ -3477,11 +3496,11 @@ function renderNewPurchase() {
       <div id="productResults"></div>
       ${inlineProductHtml('buyNew')}
       <div class="data line-grid line-grid-edit">
-        <div class="data-head"><span>الصنف</span><span>رقم الصنف</span><span>الكود</span><span>المخزن</span><span>الكمية</span><span>السعر</span><span>الإجمالي</span><span></span></div>
+        <div class="data-head"><span>الصنف</span><span>رقم الصنف</span><span>الكود</span><span>المخزن</span><span>الكمية</span><span id="priceHead">السعر</span><span>الإجمالي</span><span></span></div>
         <div id="draftLines"></div>
       </div>
       <div class="toolbar"><label class="paid-amount">الخصم<input id="purchaseDiscount" type="number" min="0" step="0.01" value="${purchaseDraft.discount || ''}" placeholder="0"></label></div>
-      <div class="meta"><span id="draftTotal">الإجمالي: 0</span></div>
+      <div class="meta"><span id="draftTotal">الإجمالي: 0</span> <span id="draftLocal"></span></div>
       <p class="note">${purchaseDraft.partial ? `المدفوع حالياً ${money(purchaseDraft.partial)}. غيّر خانة المدفوع لو عايز مبلغاً مختلفاً، ولو فضيتها السداد يبقى على كامل الفاتورة. لو اخترت آجل، المبلغ المدفوع يفضل كما هو.` : 'اختر نقدي أو آجل بوضوح أعلى. في النقدي اكتب المدفوع لو السداد جزئي، أو اتركه فاضي لكامل الفاتورة. كل صنف في الفاتورة يقدر يدخل مخزناً مختلفاً.'}</p>
       <button id="savePurchase" class="primary" type="button">${editing ? 'حفظ التعديل' : 'حفظ فاتورة الشراء'}</button>
       ${editing ? '<button id="cancelEdit" class="ghost wide-ghost" type="button">رجوع للفاتورة</button>' : ''}
@@ -3494,6 +3513,7 @@ function renderNewPurchase() {
       `<div class="data-row"><span data-label="الصنف">${esc(line.name)}</span><span data-label="رقم الصنف">${esc(line.productId || '')}</span><span data-label="الكود">${esc(line.code || '')}</span><span data-label="المخزن"><select data-i="${index}" class="line-store">${storeOptions(line.storeId)}</select></span><span data-label="الكمية"><input class="line-qty" data-i="${index}" type="number" min="0.01" step="0.01" value="${line.qty}"></span><span data-label="السعر"><input class="line-price" data-i="${index}" type="number" min="0" step="0.01" value="${line.price}"></span><span data-label="الإجمالي" class="line-sum">${money(line.qty * line.price)}</span><span data-label="حذف"><button type="button" data-i="${index}" class="ghost remove-line">حذف</button></span></div>`
     ).join('') || '<div class="empty">لم تُضف أصناف</div>';
     showDraftTotal(purchaseDraft, 'purchaseDiscount', total);
+    paintCurrency();
     document.querySelectorAll('.line-qty, .line-price').forEach((input) => {
       input.oninput = () => {
         readLineInputs(purchaseDraft.lines);
@@ -3502,6 +3522,7 @@ function renderNewPurchase() {
         row.querySelector('.line-sum').textContent = money(line.qty * line.price);
         const next = purchaseDraft.lines.reduce((sum, item) => sum + item.qty * item.price, 0);
         showDraftTotal(purchaseDraft, 'purchaseDiscount', next);
+        paintCurrency();
       };
     });
     document.querySelectorAll('.line-store').forEach((input) => {
@@ -3518,7 +3539,36 @@ function renderNewPurchase() {
   document.getElementById('purchaseDiscount').oninput = () => {
     const total = purchaseDraft.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
     showDraftTotal(purchaseDraft, 'purchaseDiscount', total);
+    paintCurrency();
   };
+  function usd() { return purchaseDraft.currency === 'USD'; }
+  function paintCurrency() {
+    const rate = Number(document.getElementById('purchaseRate').value);
+    purchaseDraft.exRate = document.getElementById('purchaseRate').value;
+    document.getElementById('rateWrap').classList.toggle('hidden', !usd());
+    document.getElementById('priceHead').textContent = usd() ? 'السعر ($)' : 'السعر';
+    const gross = purchaseDraft.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
+    const net = Math.max(gross - (Number(purchaseDraft.discount) || 0), 0);
+    document.getElementById('draftLocal').textContent = usd()
+      ? (rate > 0 ? `· بالدولار — يعادل ${money(net * rate)} جنيه` : '· بالدولار — اكتب سعر الدولار')
+      : '';
+    document.querySelectorAll('.pay-opt[data-mode="cash"]').forEach((btn) => { btn.disabled = usd(); });
+  }
+  document.getElementById('purchaseRate').oninput = paintCurrency;
+  document.getElementById('purchaseCurrency').onchange = async (event) => {
+    purchaseDraft.currency = event.target.value;
+    if (usd()) {
+      setPayMode(false);
+      if (!(Number(document.getElementById('purchaseRate').value) > 0)) {
+        try {
+          const last = await api('/api/purchases/usd-rate');
+          if (last.rate > 0 && !(Number(document.getElementById('purchaseRate').value) > 0)) document.getElementById('purchaseRate').value = last.rate;
+        } catch (error) { /* the user types the rate */ }
+      }
+    }
+    paintCurrency();
+  };
+  paintCurrency();
   liveSearch('supplierQ', 'findSupplier', 'supplierResults');
   document.getElementById('findSupplier').onclick = async () => {
     const q = document.getElementById('supplierQ').value.trim();
@@ -3610,6 +3660,8 @@ function renderNewPurchase() {
       const payload = {
         supplierId: purchaseDraft.supplierId,
         date: opDateValue('purchaseDate'),
+        currency: purchaseDraft.currency,
+        exRate: purchaseDraft.currency === 'USD' ? Number(document.getElementById('purchaseRate').value) : 1,
         storeId: headerStore,
         discount: Number(document.getElementById('purchaseDiscount').value || 0),
         ...paidPayload(),
@@ -3636,6 +3688,14 @@ function renderNewPurchase() {
       button.disabled = false;
     }
   };
+}
+
+function curMoney(value, currencyId) {
+  return Number(currencyId) ? `${money(value)} $` : money(value);
+}
+
+function rateFact(invoice) {
+  return Number(invoice.currencyId) ? [['العملة', `دولار — سعر الدولار ${num(invoice.exRate)} جنيه`]] : [];
 }
 
 function longDate(value) {
@@ -3740,14 +3800,17 @@ function invoicePrintHtml(kind, data) {
     [party, invoice.name || '—'],
     ['التاريخ', longDate(invoice.date)],
     ['المستخدم', invoice.byName || '—'],
-    ['عدد الأصناف', num(data.lines.length)]
+    ['عدد الأصناف', num(data.lines.length)],
+    ...rateFact(invoice)
   ];
+  const cur = invoice.currencyId;
   const totals = [
-    ...(Number(invoice.discount) > 0 ? [['قبل الخصم', money(invoice.products)], ['الخصم', money(invoice.discount)]] : []),
-    ['الإجمالي', money(invoice.total)],
-    ['المدفوع', money(invoice.paid)],
-    ['المرتجع', money(invoice.returnedAmount)],
-    ['المتبقي', money(invoice.due)]
+    ...(Number(invoice.discount) > 0 ? [['قبل الخصم', curMoney(invoice.products, cur)], ['الخصم', curMoney(invoice.discount, cur)]] : []),
+    ['الإجمالي', curMoney(invoice.total, cur)],
+    ...(Number(cur) ? [['يعادل بالجنيه', money(Number(invoice.total) * Number(invoice.exRate))]] : []),
+    ['المدفوع', curMoney(invoice.paid, cur)],
+    ['المرتجع', curMoney(invoice.returnedAmount, cur)],
+    ['المتبقي', curMoney(invoice.due, cur)]
   ];
   return `<article class="print-sheet">
     <header class="print-brand">
@@ -3800,16 +3863,17 @@ async function openInvoice(kind, id, options = {}) {
       <button id="closeDrawer" class="ghost" type="button">إغلاق</button>
     </header>
     <div class="sheet-actions">
-      ${data.lines.some((line) => Number(line.qty) - Number(line.returned) > 0) ? '<button id="returnBtn" class="history-btn primary" type="button">مرتجع من الفاتورة</button>' : ''}
+      ${!Number(invoice.currencyId) && data.lines.some((line) => Number(line.qty) - Number(line.returned) > 0) ? '<button id="returnBtn" class="history-btn primary" type="button">مرتجع من الفاتورة</button>' : ''}
       <button id="printInvoice" class="ghost" type="button">طباعة الفاتورة</button>
       <button id="editInvoice" type="button">تعديل الفاتورة</button>
     </div>
+    ${Number(invoice.currencyId) ? `<p class="note currency-note">فاتورة بالدولار — سعر الدولار ${num(invoice.exRate)} جنيه — الإجمالي يعادل ${money(Number(invoice.total) * Number(invoice.exRate))} جنيه</p>` : ''}
     <div class="money">
-      ${Number(invoice.discount) > 0 ? `<div><span>قبل الخصم</span><strong>${money(invoice.products)}</strong></div><div><span>الخصم</span><strong>${money(invoice.discount)}</strong></div>` : ''}
-      <div><span>الإجمالي</span><strong>${money(invoice.total)}</strong></div>
-      <div><span>المدفوع</span><strong>${money(invoice.paid)}</strong></div>
-      <div><span>المرتجع</span><strong>${money(invoice.returnedAmount)}</strong></div>
-      <div><span>المتبقي</span><strong>${money(invoice.due)}</strong></div>
+      ${Number(invoice.discount) > 0 ? `<div><span>قبل الخصم</span><strong>${curMoney(invoice.products, invoice.currencyId)}</strong></div><div><span>الخصم</span><strong>${curMoney(invoice.discount, invoice.currencyId)}</strong></div>` : ''}
+      <div><span>الإجمالي</span><strong>${curMoney(invoice.total, invoice.currencyId)}</strong></div>
+      <div><span>المدفوع</span><strong>${curMoney(invoice.paid, invoice.currencyId)}</strong></div>
+      <div><span>المرتجع</span><strong>${curMoney(invoice.returnedAmount, invoice.currencyId)}</strong></div>
+      <div><span>المتبقي</span><strong>${curMoney(invoice.due, invoice.currencyId)}</strong></div>
     </div>
     ${invoiceColumnPicks()}
     <div id="invoiceLines">${invoiceLinesGrid(data.lines)}</div>
@@ -3870,6 +3934,10 @@ async function beginEdit(kind, id) {
   target.storeId = lines[0] ? lines[0].storeId : null;
   target.hold = true;
   target.date = invoice.day || String(invoice.date || '').slice(0, 10);
+  if (kind !== 'sales') {
+    target.currency = Number(invoice.currencyId) ? 'USD' : 'EGP';
+    target.exRate = Number(invoice.currencyId) ? Number(invoice.exRate) : '';
+  }
   await openSection(kind === 'sales' ? 'newSale' : 'newPurchase', { force: true });
 }
 

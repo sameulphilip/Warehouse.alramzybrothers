@@ -397,6 +397,15 @@ main > .panel-note { margin: 8px 2px 12px; padding: 0; color: var(--muted); font
 .line-avail.short { color: var(--red); font-weight: 700; }
 .saved-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid #b7e1c4; border-radius: 10px; background: #ecf8f0; color: #17643a; }
 .saved-bar strong { flex: 1 1 auto; }
+.store-stock { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: #f8faff; }
+.store-stock > strong { display: block; margin-bottom: 10px; }
+.store-stock-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.store-stock-grid > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-radius: 8px; background: #fff; border: 1px solid #e1e7f2; }
+.store-stock-grid b { font-size: 1.1rem; }
+.store-stock-grid .has b { color: #17643a; }
+.store-stock-grid .zero { opacity: .65; }
+.store-stock-grid .neg b { color: var(--red); }
+.store-stock-grid .total { background: var(--ink); color: #fff; border-color: transparent; }
 .line-grid .line-store { width: 100%; min-width: 0; margin: 0; }
 .meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; color: var(--muted); margin: 8px 0; font-size: 0.86rem; }
 .note { color: var(--muted); font-size: 0.84rem; line-height: 1.7; background: #f8fafd; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
